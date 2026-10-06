@@ -129,5 +129,8 @@ pub enum HubToBridgeMessage {
     ClearResults {
         serial: String,
     },
+    UpdateBridge {
+        download_url: Option<String>,
+    },
     Ping,
 }

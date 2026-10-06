@@ -4,6 +4,7 @@ mod preflight;
 mod runner;
 mod scanner;
 mod types;
+mod updater;
 
 use futures_util::{SinkExt, StreamExt};
 use runner::RunnerState;
@@ -67,6 +68,11 @@ fn hide_window(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+fn trigger_self_update(download_url: Option<String>) -> Result<String, String> {
+    updater::perform_update(download_url)
+}
+
 fn config_path() -> PathBuf {
     if let Ok(mut dir) = std::env::current_exe() {
         dir.pop();
@@ -114,8 +120,9 @@ fn main() {
             // Setup Tray Menu
             let show_i = MenuItem::with_id(&handle, "show", "Open Node Settings", true, None::<&str>)?;
             let preflight_i = MenuItem::with_id(&handle, "preflight", "Run Preflight", true, None::<&str>)?;
+            let update_i = MenuItem::with_id(&handle, "update", "Check for Updates", true, None::<&str>)?;
             let quit_i = MenuItem::with_id(&handle, "quit", "Quit Heist Bridge", true, None::<&str>)?;
-            let menu = Menu::with_items(&handle, &[&show_i, &preflight_i, &quit_i])?;
+            let menu = Menu::with_items(&handle, &[&show_i, &preflight_i, &update_i, &quit_i])?;
 
             let _tray = TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
@@ -135,6 +142,14 @@ fn main() {
                         };
                         let report = preflight::check_preflight(&root);
                         println!("[Preflight Report]\n{}", report.join("\n"));
+                    }
+                    "update" => {
+                        tokio::spawn(async {
+                            match updater::perform_update(None) {
+                                Ok(msg) => println!("[Update] {msg}"),
+                                Err(err) => eprintln!("[Update Error] {err}"),
+                            }
+                        });
                     }
                     "quit" => {
                         std::process::exit(0);
@@ -180,7 +195,8 @@ fn main() {
             get_config,
             save_config,
             browse_atm_root,
-            hide_window
+            hide_window,
+            trigger_self_update
         ])
         .run(tauri::generate_context!())
         .expect("error while running Heist Bridge");
@@ -407,6 +423,20 @@ fn handle_hub_command(
                 action: "clear_results".to_string(),
                 success: res.is_ok(),
                 message: res.unwrap_or_else(|e| e),
+            });
+        }
+        HubToBridgeMessage::UpdateBridge { download_url } => {
+            let tx_clone = tx.clone();
+            tokio::spawn(async move {
+                let res = updater::perform_update(download_url);
+                let _ = tx_clone.send(BridgeToHubMessage::ActionResponse {
+                    action: "update_bridge".to_string(),
+                    success: res.is_ok(),
+                    message: match res {
+                        Ok(msg) => msg,
+                        Err(e) => format!("Update failed: {e}"),
+                    },
+                });
             });
         }
         HubToBridgeMessage::Ping => {

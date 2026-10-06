@@ -331,6 +331,19 @@ wssUI.on('connection', (ws) => {
           break;
         }
 
+        case 'UPDATE_BRIDGE': {
+          const targetWs = bridgeConnections.get(payload.nodeId);
+          if (targetWs && targetWs.readyState === WebSocket.OPEN) {
+            targetWs.send(
+              JSON.stringify({
+                type: 'UpdateBridge',
+                payload: { download_url: payload.downloadUrl }
+              })
+            );
+          }
+          break;
+        }
+
         case 'SET_LAMP': {
           const targetWs = bridgeConnections.get(payload.nodeId);
           if (targetWs && targetWs.readyState === WebSocket.OPEN) {

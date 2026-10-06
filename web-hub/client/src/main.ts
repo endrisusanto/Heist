@@ -184,6 +184,7 @@ function renderFleet() {
         <span class="node-tag">v${node.version}</span>
       </div>
       <div class="node-actions">
+        <button class="btn btn-outline btn-xs" data-update-node="${node.nodeId}">Update</button>
         <button class="btn btn-outline btn-xs" data-preflight-node="${node.nodeId}">Preflight</button>
       </div>
     `;
@@ -257,6 +258,16 @@ function attachDeviceListeners() {
     btn.addEventListener('click', (e) => {
       const nodeId = (e.currentTarget as HTMLElement).dataset.preflightNode!;
       runPreflightForNode(nodeId);
+    });
+  });
+
+  document.querySelectorAll('[data-update-node]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      const nodeId = (e.currentTarget as HTMLElement).dataset.updateNode!;
+      if (confirm(`Trigger remote silent update on node ${nodeId}?`)) {
+        appendConsole(`[System] Sending silent update command to node ${nodeId}...`, 'info');
+        sendToHub({ type: 'UPDATE_BRIDGE', payload: { nodeId } });
+      }
     });
   });
 
