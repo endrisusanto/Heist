@@ -1,13 +1,34 @@
 import http from 'http';
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import { WebSocketServer, WebSocket } from 'ws';
 import { DeviceInfo, FleetState, NodeState, RunBatchPayload } from './types.js';
 
 const PORT = parseInt(process.env.PORT || '4020', 10);
 const BRIDGE_TOKEN = process.env.BRIDGE_TOKEN || '';
 const PUBLIC_ORIGIN = process.env.PUBLIC_ORIGIN || 'https://heist.endrisusanto.my.id';
-const CLIENT_DIST = path.resolve(process.cwd(), '../client/dist');
+
+function resolveClientDist(): string {
+  const currentDir = path.dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    path.resolve(currentDir, '../../client/dist'),
+    path.resolve(currentDir, '../client/dist'),
+    path.resolve(process.cwd(), 'web-hub/client/dist'),
+    path.resolve(process.cwd(), 'client/dist'),
+    path.resolve(process.cwd(), '../client/dist'),
+    '/app/web-hub/client/dist'
+  ];
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate) && fs.existsSync(path.join(candidate, 'index.html'))) {
+      return candidate;
+    }
+  }
+  return path.resolve(process.cwd(), 'web-hub/client/dist');
+}
+
+const CLIENT_DIST = resolveClientDist();
 
 // In-memory fleet state
 const fleetState: FleetState = {
