@@ -1,0 +1,14 @@
+services:
+  heist-hub:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: heist-hub
+    restart: unless-stopped
+    ports:
+      - "${PORT:-4020}:4020"
+    environment:
+      - PORT=4020
+      - BRIDGE_TOKEN=${BRIDGE_TOKEN:-}
+      - PUBLIC_ORIGIN=${PUBLIC_ORIGIN:-https://heist.endrisusanto.my.id}
+      - NODE_ENV=production

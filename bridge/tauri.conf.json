@@ -1,0 +1,49 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Heist Bridge",
+  "version": "0.1.0",
+  "identifier": "com.heist.bridge",
+  "build": {
+    "frontendDist": "ui"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "Heist Bridge - Node Settings",
+        "label": "main",
+        "width": 520,
+        "height": 580,
+        "resizable": false,
+        "center": true,
+        "visible": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["deb", "msi"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": [
+      "resources/**/*"
+    ],
+    "linux": {
+      "deb": {
+        "depends": [
+          "libayatana-appindicator3-1 | libappindicator3-1",
+          "libwebkit2gtk-4.1-0 | libwebkit2gtk-4.0-37"
+        ],
+        "section": "utils"
+      }
+    }
+  }
+}

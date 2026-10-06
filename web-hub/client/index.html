@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/png" href="/favicon.png" />
+    <title>Heist Hub - Automated Android Fleet Orchestration Engine</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <div id="app" class="app-layout">
+      <!-- Top Navigation / Brand Bar -->
+      <header class="topbar">
+        <div class="topbar-left">
+          <div class="brand">
+            <img src="/logo.png" alt="Heist Logo" class="brand-logo" />
+            <div class="brand-info">
+              <span class="brand-title">HEIST HUB</span>
+              <span class="brand-sub">Central Test Automation Fleet</span>
+            </div>
+          </div>
+          <div class="hub-status-pill" id="hubStatusPill">
+            <span class="status-dot live" id="hubStatusDot"></span>
+            <span id="hubStatusText">Connecting...</span>
+          </div>
+        </div>
+
+        <div class="topbar-center">
+          <div class="fleet-metrics">
+            <div class="metric-item">
+              <span class="metric-label">Nodes</span>
+              <span class="metric-val" id="metricNodes">0</span>
+            </div>
+            <div class="metric-divider"></div>
+            <div class="metric-item">
+              <span class="metric-label">Devices</span>
+              <span class="metric-val" id="metricDevices">0</span>
+            </div>
+            <div class="metric-divider"></div>
+            <div class="metric-item">
+              <span class="metric-label">Active Runs</span>
+              <span class="metric-val" id="metricRuns">0</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="topbar-right">
+          <button id="preflightBtn" class="btn btn-outline btn-sm">Preflight Nodes</button>
+          <button id="refreshBtn" class="btn btn-outline btn-sm">Refresh Fleet</button>
+        </div>
+      </header>
+
+      <!-- Main Workspace -->
+      <div class="main-body">
+        <!-- Left Pane: Devices by Node -->
+        <section class="pane left-pane">
+          <div class="pane-header">
+            <div class="pane-title-group">
+              <h2>Connected Fleet</h2>
+              <span class="badge" id="selectedCountBadge">0 selected</span>
+            </div>
+            <div class="pane-actions">
+              <button id="selectAllBtn" class="btn-link">Select All</button>
+              <button id="deselectAllBtn" class="btn-link">Clear</button>
+            </div>
+          </div>
+
+          <div class="device-fleet-container" id="deviceFleetContainer">
+            <div class="empty-state" id="emptyFleetState">
+              <div class="empty-icon">📱</div>
+              <h3>No Nodes or Devices Online</h3>
+              <p>Start <strong>Heist Bridge</strong> on your test PC nodes to automatically discover USB/ADB devices.</p>
+            </div>
+          </div>
+        </section>
+
+        <!-- Right Pane: Batch Control & Live Log Stream -->
+        <section class="pane right-pane">
+          <!-- Batch Controller Toolbar -->
+          <div class="batch-controller">
+            <div class="batch-header">
+              <h3>Batch Test Execution</h3>
+              <div class="batch-status-tag" id="batchStatusTag">IDLE</div>
+            </div>
+
+            <div class="tool-selector-group">
+              <label class="section-label">Select Automation Tools</label>
+              <div class="tool-chips" id="toolChips">
+                <label class="tool-chip"><input type="checkbox" value="Getprop" checked /> <span>Getprop</span></label>
+                <label class="tool-chip"><input type="checkbox" value="BVT" /> <span>BVT</span></label>
+                <label class="tool-chip"><input type="checkbox" value="SVT" /> <span>SVT</span></label>
+                <label class="tool-chip"><input type="checkbox" value="SDT" /> <span>SDT</span></label>
+                <label class="tool-chip"><input type="checkbox" value="FMDUT" /> <span>FMDUT</span></label>
+                <label class="tool-chip"><input type="checkbox" value="CSCChecker" /> <span>CSCChecker</span></label>
+                <label class="tool-chip"><input type="checkbox" value="AtmOctopus" /> <span>AtmOctopus</span></label>
+              </div>
+            </div>
+
+            <div class="batch-options-row">
+              <div class="option-item">
+                <label for="concurrencyInput">Concurrency / Node</label>
+                <input type="number" id="concurrencyInput" min="1" max="16" value="1" class="input-sm" />
+              </div>
+              <div class="option-item checkbox-item">
+                <label><input type="checkbox" id="updateToolsCheck" /> <span>Update Tools from Agent</span></label>
+              </div>
+              <div class="batch-btn-group">
+                <button id="runBatchBtn" class="btn btn-primary" disabled>
+                  <span class="btn-icon">⚡</span> Run Batch
+                </button>
+                <button id="cancelBatchBtn" class="btn btn-danger" disabled>
+                  Cancel Run
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Live Log Console -->
+          <div class="console-wrapper">
+            <div class="console-header">
+              <div class="console-title">
+                <span class="terminal-dot"></span>
+                <span>Live Fleet Log Stream</span>
+                <span class="log-count" id="logCount">0 lines</span>
+              </div>
+              <div class="console-controls">
+                <input type="text" id="logFilter" placeholder="Filter logs..." class="input-xs" />
+                <label class="autoscroll-toggle">
+                  <input type="checkbox" id="autoScrollCheck" checked /> Auto-scroll
+                </label>
+                <button id="clearLogsBtn" class="btn-link">Clear</button>
+                <button id="copyLogsBtn" class="btn-link">Copy</button>
+              </div>
+            </div>
+            <div class="console-terminal" id="consoleTerminal">
+              <div class="log-line info">[System] Heist Web Hub ready. Connect bridge clients to begin streaming.</div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <!-- Preflight Modal -->
+      <div class="modal-overlay" id="preflightModal" style="display: none;">
+        <div class="modal-card">
+          <div class="modal-header">
+            <h3>Fleet Preflight Diagnostic</h3>
+            <button class="modal-close" id="closePreflightModal">&times;</button>
+          </div>
+          <div class="modal-body" id="preflightModalBody">
+            <p>Select a node to run preflight checks on tools, java, adb, and jars.</p>
+            <div id="preflightReportsContainer"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

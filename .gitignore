@@ -1,0 +1,21 @@
+# Dependencies
+node_modules/
+dist/
+target/
+.DS_Store
+*.log
+.env
+.env.local
+
+# Rust build artifacts
+bridge/target/
+**/target/
+Cargo.lock
+
+# Tauri artifacts
+bridge/gen/
+bridge/src-tauri/target/
+
+# Temporary
+scratch/
+tmp/

@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Heist Bridge</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="bridge-container">
+    <div class="header">
+      <div class="logo-box">
+        <img src="../icons/128x128.png" alt="Heist Logo" class="logo-img" />
+      </div>
+      <div class="title-box">
+        <h1>Heist Bridge</h1>
+        <p class="subtitle">System Tray Fleet Agent</p>
+      </div>
+    </div>
+
+    <div class="status-card" id="statusCard">
+      <div class="status-indicator" id="statusDot"></div>
+      <div class="status-text">
+        <strong id="statusTitle">Connecting...</strong>
+        <span id="statusDetail">Initializing fleet bridge</span>
+      </div>
+    </div>
+
+    <form id="configForm" class="config-form">
+      <div class="form-group">
+        <label for="nodeId">Node ID (PC Name)</label>
+        <input type="text" id="nodeId" required placeholder="e.g. LAB-PC-01" />
+      </div>
+
+      <div class="form-group">
+        <label for="hubUrl">Hub WebSocket URL</label>
+        <input type="text" id="hubUrl" required placeholder="wss://heist.endrisusanto.my.id/ws/bridge" />
+      </div>
+
+      <div class="form-group">
+        <label for="bridgeToken">Bridge Auth Token</label>
+        <input type="password" id="bridgeToken" placeholder="Leave empty if open" />
+      </div>
+
+      <div class="form-group">
+        <label for="atmRoot">ATM Root Directory</label>
+        <div class="input-with-action">
+          <input type="text" id="atmRoot" placeholder="/run/media/endri-pro/BINARY_HDD/AUTO or /home/.../ATM" />
+          <button type="button" id="browseBtn" class="btn secondary">Browse</button>
+        </div>
+      </div>
+
+      <div class="form-actions">
+        <button type="submit" class="btn primary" id="saveBtn">Save & Reconnect</button>
+        <button type="button" class="btn outline" id="hideBtn">Hide to Tray</button>
+      </div>
+    </form>
+
+    <div class="footer">
+      <span id="versionText">Heist Bridge v0.1.0</span>
+      <span class="dot-sep">•</span>
+      <span id="deviceCount">0 devices connected</span>
+    </div>
+  </div>
+
+  <script type="module" src="main.js"></script>
+</body>
+</html>
