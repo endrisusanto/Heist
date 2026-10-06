@@ -34,6 +34,8 @@ impl RunnerState {
     }
 }
 
+const BUNDLED_BATCH_LAUNCHER: &str = include_str!("../resources/atm-batch-launcher/AtmBatchLauncher.java");
+
 pub fn run_batch_task<F, G>(
     runner_state: RunnerState,
     request: RunRequest,
@@ -69,13 +71,17 @@ where
     }
 
     let run_id = request.run_id.clone();
-    let cancel_file = root
-        .join("atm-batch-launcher")
+    let batch_launcher_dir = root.join("atm-batch-launcher");
+    let _ = std::fs::create_dir_all(&batch_launcher_dir);
+    let _ = std::fs::create_dir_all(batch_launcher_dir.join("runs"));
+
+    // Ensure AtmBatchLauncher.java exists and is up to date
+    let java_file = batch_launcher_dir.join("AtmBatchLauncher.java");
+    let _ = std::fs::write(&java_file, BUNDLED_BATCH_LAUNCHER);
+
+    let cancel_file = batch_launcher_dir
         .join("runs")
         .join(format!(".cancel-{run_id}"));
-    if let Some(parent) = cancel_file.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
     let _ = std::fs::remove_file(&cancel_file);
 
     let active_batch = ActiveBatch {
@@ -94,19 +100,17 @@ where
     let runner_state_clone = runner_state.clone();
 
     thread::spawn(move || {
-        let java_file = root_buf
-            .join("atm-batch-launcher")
-            .join("AtmBatchLauncher.java");
-
-        // Ensure atm-batch-launcher folder and Java file exist
-        let _ = std::fs::create_dir_all(root_buf.join("atm-batch-launcher"));
-
         let devices_str = request.devices.join(",");
-        let tools_str = request.tools.join(",");
+        let tools_str = request
+            .tools
+            .iter()
+            .map(|t| t.to_lowercase())
+            .collect::<Vec<_>>()
+            .join(",");
         let concurrency_str = request.concurrency.unwrap_or(1).max(1).to_string();
 
         let mut args = vec![
-            java_file.to_string_lossy().to_string(),
+            "atm-batch-launcher/AtmBatchLauncher.java".to_string(),
             "--run".to_string(),
             "--tools".to_string(),
             tools_str,

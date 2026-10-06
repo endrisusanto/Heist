@@ -25,6 +25,7 @@ impl Default for BridgeConfig {
 pub fn default_atm_root_path() -> String {
     // Check standard candidate paths
     let candidates = [
+        "/home/endri-pro/Videos/ATM/ATMv5_20260429",
         "/run/media/endri-pro/BINARY_HDD/AUTO",
         "/run/media/endri-pro/BINARY_HDD1/AUTO",
         "/home/endri-pro/Videos/ATM",

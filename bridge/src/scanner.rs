@@ -183,11 +183,18 @@ fn first_non_empty(values: &[String]) -> String {
     "-".to_string()
 }
 
-fn normalize_modem(modem: String) -> String {
-    if modem.trim().is_empty() {
-        return "-".to_string();
+fn normalize_modem(value: String) -> String {
+    let mut seen = std::collections::HashSet::new();
+    let parts: Vec<&str> = value
+        .split(|c| c == ',' || c == '/')
+        .map(str::trim)
+        .filter(|part| !part.is_empty() && seen.insert(*part))
+        .collect();
+    if parts.is_empty() {
+        "-".to_string()
+    } else {
+        parts.join("/")
     }
-    modem
 }
 
 pub fn set_device_lamp(serial: &str, state: bool) -> Result<(), String> {
