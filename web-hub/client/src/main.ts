@@ -77,7 +77,9 @@ interface LogEntry {
 }
 const logEntries: LogEntry[] = [];
 let logHistory: string[] = [];
-let historyList: HistoryItem[] = loadHistoryFromDisk();
+let historyList: HistoryItem[] = [];
+let clockSkew = 0;
+let scrollToWorkflowOnAdd = false;
 let selectedModalDevice = 'all';
 let selectedModalTc = 'all';
 
@@ -210,19 +212,24 @@ function handleHubMessage(msg: { type: string; payload: any }) {
       break;
     }
 
-    case 'LOG_STREAM': {
-      appendModalLog(`[${payload.nodeId}][${payload.runId}] ${payload.line}`);
-      parseTestcaseProgress(payload.line);
+    case 'APP_STATE': {
+      applyAppState(payload);
       break;
     }
 
-    case 'RUN_FINISHED': {
-      const isOk = payload.exit_code === 0;
-      appendModalLog(
-        `[${payload.nodeId}] Run ${payload.run_id} finished with exit code ${payload.exit_code}`,
-        isOk ? 'success' : 'err'
-      );
-      finishCurrentRun(isOk ? 'FINISHED' : 'CANCELLED');
+    case 'LOG': {
+      appendModalLog(payload.line, payload.level);
+      break;
+    }
+
+    case 'LOGS_SNAPSHOT': {
+      logEntries.length = 0;
+      logHistory = [];
+      for (const e of payload.logs) {
+        logEntries.push(e);
+        logHistory.push(e.line);
+      }
+      renderModalConsole();
       break;
     }
 
@@ -510,8 +517,7 @@ function renderWorkflow() {
   els.workflowDevicesTableBody.querySelectorAll('[data-remove-serial]').forEach((btn) => {
     btn.addEventListener('click', (e) => {
       const s = (e.currentTarget as HTMLElement).dataset.removeSerial!;
-      workflowDevices.delete(s);
-      renderWorkflow();
+      sendToHub({ type: 'WORKFLOW_REMOVE', payload: { serial: s } });
     });
   });
 
@@ -533,158 +539,95 @@ function getSelectedTools(): string[] {
   return tools;
 }
 
-// Test Run Execution
+// Test Run Execution (state lives on the hub; this only sends intents and renders it)
 function startAutomation() {
-  const tools = getSelectedTools();
-  const devices = Array.from(workflowDevices.keys());
-
-  if (devices.length === 0 || tools.length === 0) {
-    alert('Pilih minimal 1 perangkat dan 1 testcase.');
-    return;
-  }
-
-  const runId = `run-${Date.now()}`;
-  activeRunId = runId;
-  activeRunStartTime = Date.now();
-  activeRunDevices = devices;
-  activeRunTools = tools;
-
-  const nodeBatches = new Map<string, string[]>();
-  for (const [serial, item] of workflowDevices.entries()) {
-    let list = nodeBatches.get(item.nodeId);
-    if (!list) {
-      list = [];
-      nodeBatches.set(item.nodeId, list);
-    }
-    list.push(serial);
-  }
-
-  activeRunNodeId = Array.from(nodeBatches.keys())[0] || 'syncmaster';
-
-  // Update UI to running state (Outline with animated progress bar)
-  els.startAutomationBtn.classList.add('running');
-  els.startAutomationBtn.disabled = true;
-  els.startAutomationBtn.innerHTML = `<span>Menjalankan Automasi...</span>`;
-  els.cancelAutomationBtn.style.display = 'inline-flex';
-  els.terminalActivePulse.style.display = 'inline-block';
-
-  // Reset tool table states
-  tools.forEach((t) => {
-    setToolRowStatus(t, 'RUNNING', 'Running automated test...');
-  });
-
-  // Start timer
-  if (activeRunTimerInterval) clearInterval(activeRunTimerInterval);
-  activeRunTimerInterval = setInterval(() => {
-    if (activeRunStartTime) {
-      const elapsed = Math.floor((Date.now() - activeRunStartTime) / 1000);
-      const timeStr = formatTimeDigital(elapsed);
-      tools.forEach((t) => {
-        const timeEl = document.getElementById(`time_${t}`);
-        if (timeEl) timeEl.textContent = timeStr;
-      });
-      els.modalRuntimeTag.textContent = formatDuration(elapsed);
-    }
-  }, 1000);
-
-  // Update Terminal Modal Tag
-  els.modalRunStatusBadge.textContent = '[RUNNING]';
-  els.modalRunStatusBadge.className = 'modal-status-badge running';
-  if (els.modalNodeIdLabel) {
-    els.modalNodeIdLabel.textContent = activeRunNodeId;
-  }
-  updateModalControls();
-
-  appendModalLog(`[Hub] Starting Automation Suite ${runId} across ${nodeBatches.size} node(s)...`, 'sys');
-
-  // Dispatch TRIGGER_RUN to each node
-  for (const [nodeId, devList] of nodeBatches.entries()) {
-    sendToHub({
-      type: 'TRIGGER_RUN',
-      payload: {
-        nodeId,
-        runId,
-        devices: devList,
-        tools,
-        concurrency: 1,
-        update: false
-      }
-    });
-  }
-
-  renderStandbyDevices();
+  sendToHub({ type: 'START_RUN', payload: {} });
 }
 
 function cancelAutomation() {
-  if (!activeRunId) return;
-  appendModalLog(`[Hub] Cancelling active automation suite ${activeRunId}...`, 'warn');
-
-  for (const node of Object.values(fleet.nodes)) {
-    sendToHub({
-      type: 'CANCEL_RUN',
-      payload: { nodeId: node.nodeId, runId: activeRunId }
-    });
-  }
-
-  finishCurrentRun('CANCELLED');
+  sendToHub({ type: 'CANCEL_RUN', payload: {} });
 }
 
-function finishCurrentRun(status: 'FINISHED' | 'CANCELLED') {
+function applyAppState(st: any) {
+  clockSkew = st.serverNow - Date.now();
+
+  workflowDevices.clear();
+  for (const d of st.workflow.devices) workflowDevices.set(d.serial, d);
+  historyList = st.history;
+
+  els.toolSwitches.forEach((sw) => (sw.checked = st.workflow.tools.includes(sw.dataset.tool!)));
+  els.uncheckAllToolsBtn.textContent = st.workflow.tools.length ? 'Uncheck' : 'Check All';
+
+  const r = st.run;
+  activeRunId = r ? r.runId : null;
+  activeRunStartTime = r ? r.startedAt - clockSkew : null;
+  activeRunDevices = r ? r.devices : [];
+  activeRunNodeId = r ? r.nodeId : activeRunNodeId;
+  if (r) activeRunTools = r.tools;
+
+  for (const tool of Object.keys(TOOL_LABELS)) {
+    const row = st.toolStatus[tool];
+    if (row) setToolRowStatus(tool, row.status, row.subtext, row);
+  }
+
+  applyRunUI();
+  renderAll();
+
+  if (scrollToWorkflowOnAdd && workflowDevices.size > 0) {
+    scrollToWorkflowOnAdd = false;
+    els.workflowCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+}
+
+function tickRuntime() {
+  if (!activeRunStartTime) return;
+  const elapsed = Math.floor((Date.now() - activeRunStartTime) / 1000);
+  const timeStr = formatTimeDigital(elapsed);
+  activeRunTools.forEach((t) => {
+    const timeEl = document.getElementById(`time_${t}`);
+    if (timeEl) timeEl.textContent = timeStr;
+  });
+  els.modalRuntimeTag.textContent = formatDuration(elapsed);
+}
+
+function applyRunUI() {
+  const running = activeRunId !== null;
+  const wasRunning = els.startAutomationBtn.classList.contains('running');
+
   if (activeRunTimerInterval) {
     clearInterval(activeRunTimerInterval);
     activeRunTimerInterval = null;
   }
 
-  const elapsed = activeRunStartTime ? Math.floor((Date.now() - activeRunStartTime) / 1000) : 0;
-  const tools = [...activeRunTools];
-  const devices = [...activeRunDevices];
-  const firstDev = devices[0] || 'device';
-  const pda = getDevicePda(firstDev);
+  els.startAutomationBtn.classList.toggle('running', running);
 
-  // Add to History
-  const historyItem: HistoryItem = {
-    id: activeRunId || `run-${Date.now()}`,
-    nodeId: activeRunNodeId,
-    mode: tools.map(t => t.toUpperCase()).join(', '),
-    devices,
-    runtimeSecs: elapsed,
-    passed: status === 'FINISHED' ? devices.length * tools.length : 0,
-    failed: 0,
-    total: devices.length * tools.length,
-    status,
-    archiveName: `ATM_${pda}.zip`,
-    timestamp: Date.now()
-  };
+  if (running) {
+    els.startAutomationBtn.disabled = true;
+    els.startAutomationBtn.innerHTML = `<span>Menjalankan Automasi...</span>`;
+    els.cancelAutomationBtn.style.display = 'inline-flex';
+    els.terminalActivePulse.style.display = 'inline-block';
+    els.modalRunStatusBadge.textContent = '[RUNNING]';
+    els.modalRunStatusBadge.className = 'modal-status-badge running';
+    if (els.modalNodeIdLabel) els.modalNodeIdLabel.textContent = activeRunNodeId;
+    tickRuntime();
+    activeRunTimerInterval = setInterval(tickRuntime, 1000);
+    return;
+  }
 
-  historyList.unshift(historyItem);
-  saveHistoryToDisk(historyList);
-
-  // Update tool table statuses
-  tools.forEach((t) => {
-    setToolRowStatus(
-      t,
-      status === 'FINISHED' ? 'PASSED' : 'STANDBY',
-      status === 'FINISHED' ? 'Completed successfully.' : 'Cancelled.'
-    );
-  });
-
-  // Reset running state
-  activeRunId = null;
-  activeRunStartTime = null;
-  activeRunDevices = [];
-
-  els.startAutomationBtn.classList.remove('running');
-  els.startAutomationBtn.disabled = false;
-  els.startAutomationBtn.innerHTML = `
+  if (wasRunning) {
+    els.startAutomationBtn.innerHTML = `
     <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
     <span>Jalankan Automasi</span>
   `;
-  els.startAutomationBtn.style.display = 'inline-flex';
+    els.startAutomationBtn.style.display = 'inline-flex';
+  }
   els.cancelAutomationBtn.style.display = 'none';
-  els.modalRunStatusBadge.textContent = `[${status}]`;
-  els.modalRunStatusBadge.className = `modal-status-badge ${status.toLowerCase()}`;
 
-  renderAll();
+  const last = historyList[0];
+  if (last) {
+    els.modalRunStatusBadge.textContent = `[${last.status}]`;
+    els.modalRunStatusBadge.className = `modal-status-badge ${last.status.toLowerCase()}`;
+  }
 }
 
 function getDevicePda(serial: string): string {
@@ -734,7 +677,7 @@ function getDeviceModel(serial: string): string {
   document.body.removeChild(link);
 };
 
-function setToolRowStatus(tool: string, status: 'STANDBY' | 'RUNNING' | 'PASSED' | 'WARNING' | 'FAILED', subtext: string) {
+function setToolRowStatus(tool: string, status: 'STANDBY' | 'RUNNING' | 'PASSED' | 'WARNING' | 'FAILED', subtext: string, row?: { serial?: string; nodeId?: string }) {
   const statusEl = document.getElementById(`status_${tool}`);
   const subtestEl = document.getElementById(`subtest_${tool}`);
   const resEl = document.getElementById(`res_${tool}`);
@@ -750,33 +693,17 @@ function setToolRowStatus(tool: string, status: 'STANDBY' | 'RUNNING' | 'PASSED'
 
   if (resEl) {
     if (status === 'PASSED') {
-      const devSerial = activeRunDevices[0] || 'device';
+      const devSerial = row?.serial || 'device';
       const pda = getDevicePda(devSerial);
       const toolUpper = tool.toLowerCase() === 'getprop' ? 'Getprop' : tool.toUpperCase();
       const zipName = `${toolUpper}_${pda}.zip`;
       resEl.innerHTML = `
-        <button class="btn-download-sm" onclick="window.downloadFile('${zipName}', '${tool}', '${devSerial}', '${activeRunNodeId}', '${pda}')">Download</button>
+        <button class="btn-download-sm" onclick="window.downloadFile('${zipName}', '${tool}', '${devSerial}', '${row?.nodeId || ''}', '${pda}')">Download</button>
         <span class="badge-res pass">Pass 1</span>
       `;
     } else if (status === 'STANDBY') {
       resEl.innerHTML = `<button class="btn-download-sm" disabled>Download</button>`;
     }
-  }
-}
-
-function parseTestcaseProgress(line: string) {
-  // Check for pass/fail/error markers in terminal stream
-  if (line.includes('[Getprop] END Getprop') || line.includes('Getprop execution completed')) {
-    setToolRowStatus('getprop', 'PASSED', 'Pengumpulan build properties sukses.');
-  }
-  if (line.includes('BVT') && line.includes('PASS')) {
-    setToolRowStatus('bvt', 'PASSED', 'BVT Tests completed successfully.');
-  }
-  if (line.includes('SVT') && line.includes('PASS')) {
-    setToolRowStatus('svt', 'PASSED', 'SVT Preload validation passed.');
-  }
-  if (line.includes('SDT') && line.includes('PASS')) {
-    setToolRowStatus('sdt', 'PASSED', 'SDT Device test passed.');
   }
 }
 
@@ -862,25 +789,9 @@ function renderHistory() {
   els.historyTableBody.querySelectorAll('[data-delete-hist]').forEach((btn) => {
     btn.addEventListener('click', (e) => {
       const id = (e.currentTarget as HTMLElement).dataset.deleteHist!;
-      historyList = historyList.filter(h => h.id !== id);
-      saveHistoryToDisk(historyList);
-      renderHistory();
+      sendToHub({ type: 'HISTORY_DELETE', payload: { id } });
     });
   });
-}
-
-function loadHistoryFromDisk(): HistoryItem[] {
-  try {
-    const raw = localStorage.getItem('heist_history_records');
-    if (raw) return JSON.parse(raw);
-  } catch (e) {}
-  return [];
-}
-
-function saveHistoryToDisk(list: HistoryItem[]) {
-  try {
-    localStorage.setItem('heist_history_records', JSON.stringify(list));
-  } catch (e) {}
 }
 
 const TOOL_LABELS: Record<string, string> = {
@@ -1094,50 +1005,38 @@ function setupEventListeners() {
 
   // Add to Workflow button
   els.addToWorkflowBtn.addEventListener('click', () => {
-    els.standbyTableBody.querySelectorAll('.standby-dev-check:checked').forEach((cb) => {
-      const target = cb as HTMLInputElement;
-      const serial = target.dataset.serial!;
-      const nodeId = target.dataset.node!;
-      const model = target.dataset.model!;
-      const pda = target.dataset.pda!;
-      const buildType = target.dataset.type!;
-      workflowDevices.set(serial, { serial, nodeId, model, pda, buildType });
+    const devices = Array.from(els.standbyTableBody.querySelectorAll('.standby-dev-check:checked')).map((cb) => {
+      const d = (cb as HTMLInputElement).dataset;
+      return { serial: d.serial, nodeId: d.node, model: d.model, pda: d.pda, buildType: d.type };
     });
     selectedStandbySerials.clear();
-    renderWorkflow();
+    scrollToWorkflowOnAdd = true;
+    sendToHub({ type: 'WORKFLOW_ADD', payload: { devices } });
     renderStandbyDevices();
-    if (workflowDevices.size > 0) {
-      els.workflowCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }
   });
 
   // Uncheck All Tools
   els.uncheckAllToolsBtn.addEventListener('click', () => {
-    const allChecked = Array.from(els.toolSwitches).some((s) => s.checked);
-    els.toolSwitches.forEach((s) => (s.checked = !allChecked));
-    els.uncheckAllToolsBtn.textContent = allChecked ? 'Check All' : 'Uncheck';
-    renderWorkflow();
+    const tools = getSelectedTools().length > 0 ? [] : Object.keys(TOOL_LABELS);
+    sendToHub({ type: 'SET_TOOLS', payload: { tools } });
   });
 
   els.toolSwitches.forEach((sw) => {
     sw.addEventListener('change', () => {
-      renderWorkflow();
+      sendToHub({ type: 'SET_TOOLS', payload: { tools: getSelectedTools() } });
     });
   });
 
   // Clear All Workflow Devices
   if (els.clearAllWorkflowDevsBtn) {
     els.clearAllWorkflowDevsBtn.addEventListener('click', () => {
-      workflowDevices.clear();
-      renderWorkflow();
+      sendToHub({ type: 'WORKFLOW_CLEAR', payload: {} });
     });
   }
 
   // Delete Workflow
   els.deleteWorkflowBtn.addEventListener('click', () => {
-    workflowDevices.clear();
-    renderWorkflow();
-    renderStandbyDevices();
+    sendToHub({ type: 'WORKFLOW_CLEAR', payload: {} });
   });
 
   // Execution buttons
@@ -1147,9 +1046,7 @@ function setupEventListeners() {
   // Clear History
   els.clearAllHistoryBtn.addEventListener('click', () => {
     if (confirm('Hapus seluruh riwayat pengujian?')) {
-      historyList = [];
-      saveHistoryToDisk(historyList);
-      renderHistory();
+      sendToHub({ type: 'HISTORY_CLEAR', payload: {} });
     }
   });
 
@@ -1195,9 +1092,7 @@ function setupEventListeners() {
   });
 
   els.modalClearLogBtn.addEventListener('click', () => {
-    els.modalConsoleOutput.innerHTML = '';
-    logHistory = [];
-    logEntries.length = 0;
+    sendToHub({ type: 'LOGS_CLEAR', payload: {} });
   });
 
   els.modalCopyLogBtn.addEventListener('click', () => {

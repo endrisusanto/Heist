@@ -103,6 +103,234 @@ function broadcastToUI(msg: object) {
   }
 }
 
+
+// ---- Unified server-side app state (shared by every UI session) ----
+type ToolStatus = 'STANDBY' | 'RUNNING' | 'PASSED';
+interface WorkflowDevice { serial: string; nodeId: string; model: string; pda: string; buildType: string }
+interface ToolRow { status: ToolStatus; subtext: string; serial?: string; nodeId?: string }
+interface HistoryRecord {
+  id: string; nodeId: string; mode: string; devices: string[]; runtimeSecs: number;
+  passed: number; failed: number; total: number; status: 'FINISHED' | 'CANCELLED';
+  archiveName: string; timestamp: number;
+}
+interface RunState {
+  runId: string; nodeId: string; nodeIds: string[]; pending: string[]; failed: boolean;
+  devices: string[]; tools: string[]; startedAt: number;
+}
+
+const STATE_FILE = path.join(RESULTS_ROOT, 'state.json');
+const app = {
+  workflow: { devices: [] as WorkflowDevice[], tools: ['getprop', 'bvt', 'svt', 'sdt'] },
+  history: [] as HistoryRecord[],
+  toolStatus: {} as Record<string, ToolRow>,
+  run: null as RunState | null
+};
+const logs: Array<{ line: string; level: string }> = [];
+
+try {
+  const saved = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
+  app.workflow = saved.workflow || app.workflow;
+  app.history = saved.history || [];
+  app.toolStatus = saved.toolStatus || {};
+  for (const row of Object.values(app.toolStatus)) {
+    if (row.status === 'RUNNING') { row.status = 'STANDBY'; row.subtext = 'Interrupted.'; }
+  }
+} catch {
+  // first start, nothing persisted yet
+}
+
+function saveState() {
+  try {
+    fs.mkdirSync(RESULTS_ROOT, { recursive: true });
+    fs.writeFileSync(STATE_FILE, JSON.stringify({ workflow: app.workflow, history: app.history, toolStatus: app.toolStatus }));
+  } catch (err) {
+    console.error('[State] save failed', err);
+  }
+}
+
+function appSnapshot() {
+  const r = app.run;
+  return {
+    workflow: app.workflow,
+    history: app.history,
+    toolStatus: app.toolStatus,
+    run: r && { runId: r.runId, nodeId: r.nodeId, devices: r.devices, tools: r.tools, startedAt: r.startedAt },
+    serverNow: Date.now()
+  };
+}
+
+function broadcastApp(persist = true) {
+  if (persist) saveState();
+  broadcastToUI({ type: 'APP_STATE', payload: appSnapshot() });
+}
+
+function pushLog(line: string, level = 'normal') {
+  logs.push({ line, level });
+  if (logs.length > 2000) logs.shift();
+  broadcastToUI({ type: 'LOG', payload: { line, level } });
+}
+
+function setToolStatus(tool: string, status: ToolStatus, subtext: string) {
+  const r = app.run;
+  if (!r || !r.tools.includes(tool)) return;
+  app.toolStatus[tool] = { status, subtext, serial: r.devices[0], nodeId: r.nodeId };
+  broadcastApp(false);
+}
+
+function parseProgress(line: string) {
+  if (line.includes('[Getprop] END Getprop') || line.includes('Getprop execution completed')) {
+    setToolStatus('getprop', 'PASSED', 'Pengumpulan build properties sukses.');
+  }
+  if (line.includes('BVT') && line.includes('PASS')) setToolStatus('bvt', 'PASSED', 'BVT Tests completed successfully.');
+  if (line.includes('SVT') && line.includes('PASS')) setToolStatus('svt', 'PASSED', 'SVT Preload validation passed.');
+  if (line.includes('SDT') && line.includes('PASS')) setToolStatus('sdt', 'PASSED', 'SDT Device test passed.');
+}
+
+function finishRun(status: 'FINISHED' | 'CANCELLED') {
+  const r = app.run;
+  if (!r) return;
+  app.run = null;
+
+  const first = r.devices[0] || 'device';
+  let pda = first;
+  for (const node of Object.values(fleetState.nodes)) {
+    const dev = (node.devices || []).find((d) => d.serial === first);
+    const v = dev && [dev.build, dev.csc].find((x) => x && x !== '-' && x !== 'UNKNOWN' && x.trim());
+    if (v) { pda = v.trim(); break; }
+  }
+
+  const total = r.devices.length * r.tools.length;
+  app.history.unshift({
+    id: r.runId,
+    nodeId: r.nodeId,
+    mode: r.tools.map((t) => t.toUpperCase()).join(', '),
+    devices: r.devices,
+    runtimeSecs: Math.floor((Date.now() - r.startedAt) / 1000),
+    passed: status === 'FINISHED' ? total : 0,
+    failed: 0,
+    total,
+    status,
+    archiveName: `ATM_${pda}.zip`,
+    timestamp: Date.now()
+  });
+  app.history = app.history.slice(0, 200);
+
+  for (const t of r.tools) {
+    app.toolStatus[t] = status === 'FINISHED'
+      ? { status: 'PASSED', subtext: 'Completed successfully.', serial: first, nodeId: r.nodeId }
+      : { status: 'STANDBY', subtext: 'Cancelled.' };
+  }
+  pushLog(`[Hub] Run ${r.runId} ${status}`, status === 'FINISHED' ? 'success' : 'warn');
+  broadcastApp();
+  broadcastFleetState();
+}
+
+function endRunNode(runId: string, nodeId: string, ok: boolean) {
+  activeRunsMap.delete(`${runId}:${nodeId}`);
+  const r = app.run;
+  if (!r || r.runId !== runId) return;
+  r.pending = r.pending.filter((n) => n !== nodeId);
+  if (!ok) r.failed = true;
+  if (r.pending.length === 0) finishRun(r.failed ? 'CANCELLED' : 'FINISHED');
+}
+
+function startRun(ui: WebSocket) {
+  const fail = (message: string) =>
+    ui.send(JSON.stringify({ type: 'ACTION_RESPONSE', payload: { nodeId: 'hub', action: 'trigger_run', success: false, message } }));
+  const { devices, tools } = app.workflow;
+  if (app.run) return fail('Sudah ada automasi yang berjalan.');
+  if (devices.length === 0 || tools.length === 0) return fail('Pilih minimal 1 perangkat dan 1 testcase.');
+
+  const busy = new Set(getFleetPayload().busyDevices);
+  const batches = new Map<string, string[]>();
+  for (const d of devices) {
+    if (busy.has(d.serial)) return fail(`Perangkat ${d.serial} sedang menjalankan pengujian.`);
+    batches.set(d.nodeId, [...(batches.get(d.nodeId) || []), d.serial]);
+  }
+  for (const nodeId of batches.keys()) {
+    const w = bridgeConnections.get(nodeId);
+    if (!w || w.readyState !== WebSocket.OPEN) return fail(`Node ${nodeId} offline atau tidak terhubung.`);
+  }
+
+  const runId = `run-${Date.now()}`;
+  const nodeIds = [...batches.keys()];
+  const serials = devices.map((d) => d.serial);
+  app.run = { runId, nodeId: nodeIds[0], nodeIds, pending: [...nodeIds], failed: false, devices: serials, tools: [...tools], startedAt: Date.now() };
+  for (const t of tools) {
+    app.toolStatus[t] = { status: 'RUNNING', subtext: 'Running automated test...', serial: serials[0], nodeId: nodeIds[0] };
+  }
+  pushLog(`[Hub] Starting Automation Suite ${runId} across ${nodeIds.length} node(s)...`, 'sys');
+
+  for (const [nodeId, batch] of batches) {
+    activeRunsMap.set(`${runId}:${nodeId}`, { runId, nodeId, devices: batch, tools: [...tools], startedAt: app.run.startedAt });
+    bridgeConnections.get(nodeId)!.send(JSON.stringify({
+      type: 'TriggerRun',
+      payload: { run_id: runId, devices: batch, tools, concurrency: 1, update: false }
+    }));
+    const node = fleetState.nodes[nodeId];
+    if (node && !node.activeRuns.includes(runId)) node.activeRuns.push(runId);
+  }
+  broadcastApp();
+  broadcastFleetState();
+}
+
+function cancelRun() {
+  const r = app.run;
+  if (!r) return;
+  pushLog(`[Hub] Cancelling active automation suite ${r.runId}...`, 'warn');
+  for (const nodeId of r.nodeIds) {
+    activeRunsMap.delete(`${r.runId}:${nodeId}`);
+    const node = fleetState.nodes[nodeId];
+    if (node) node.activeRuns = node.activeRuns.filter((id) => id !== r.runId);
+    const w = bridgeConnections.get(nodeId);
+    if (w && w.readyState === WebSocket.OPEN) w.send(JSON.stringify({ type: 'CancelRun', payload: { run_id: r.runId } }));
+  }
+  finishRun('CANCELLED');
+}
+
+function handleAppIntent(type: string, payload: any, ui: WebSocket): boolean {
+  const str = (v: unknown) => String(v ?? '');
+  switch (type) {
+    case 'START_RUN': startRun(ui); return true;
+    case 'CANCEL_RUN': cancelRun(); return true;
+    case 'LOGS_CLEAR':
+      logs.length = 0;
+      broadcastToUI({ type: 'LOGS_SNAPSHOT', payload: { logs } });
+      return true;
+    case 'HISTORY_DELETE':
+      app.history = app.history.filter((h) => h.id !== payload.id);
+      broadcastApp();
+      return true;
+    case 'HISTORY_CLEAR':
+      app.history = [];
+      broadcastApp();
+      return true;
+    case 'WORKFLOW_ADD': {
+      if (app.run) return true;
+      const busy = new Set(getFleetPayload().busyDevices);
+      for (const d of payload.devices || []) {
+        if (busy.has(d.serial) || app.workflow.devices.some((x) => x.serial === d.serial)) continue;
+        app.workflow.devices.push({ serial: str(d.serial), nodeId: str(d.nodeId), model: str(d.model), pda: str(d.pda), buildType: str(d.buildType) });
+      }
+      broadcastApp();
+      return true;
+    }
+    case 'WORKFLOW_REMOVE':
+      if (!app.run) app.workflow.devices = app.workflow.devices.filter((d) => d.serial !== payload.serial);
+      broadcastApp();
+      return true;
+    case 'WORKFLOW_CLEAR':
+      if (!app.run) app.workflow.devices = [];
+      broadcastApp();
+      return true;
+    case 'SET_TOOLS':
+      if (!app.run) app.workflow.tools = (payload.tools || []).filter((t: string) => ['getprop', 'bvt', 'svt', 'sdt'].includes(t));
+      broadcastApp();
+      return true;
+  }
+  return false;
+}
+
 // Zero-dependency standard ZIP generator
 const CRC_TABLE = new Uint32Array(256);
 for (let i = 0; i < 256; i++) {
@@ -475,14 +703,8 @@ wssBridge.on('connection', (ws, req) => {
 
         case 'LogStream': {
           appendLog(payload.run_id, payload.line);
-          broadcastToUI({
-            type: 'LOG_STREAM',
-            payload: {
-              nodeId: boundNodeId,
-              runId: payload.run_id,
-              line: payload.line
-            }
-          });
+          pushLog(`[${boundNodeId}][${payload.run_id}] ${payload.line}`);
+          parseProgress(payload.line);
           break;
         }
 
@@ -502,19 +724,14 @@ wssBridge.on('connection', (ws, req) => {
         }
 
         case 'RunFinished': {
-          activeRunsMap.delete(payload.run_id);
           if (boundNodeId && fleetState.nodes[boundNodeId]) {
             fleetState.nodes[boundNodeId].activeRuns = fleetState.nodes[boundNodeId].activeRuns.filter(
               (id) => id !== payload.run_id
             );
           }
-          broadcastToUI({
-            type: 'RUN_FINISHED',
-            payload: {
-              nodeId: boundNodeId,
-              ...payload
-            }
-          });
+          const ok = payload.exit_code === 0;
+          pushLog(`[${boundNodeId}] Run ${payload.run_id} finished with exit code ${payload.exit_code}`, ok ? 'success' : 'err');
+          endRunNode(payload.run_id, boundNodeId, ok);
           broadcastFleetState();
           break;
         }
@@ -557,10 +774,8 @@ wssBridge.on('connection', (ws, req) => {
     console.log(`[Bridge Disconnected] Node: ${boundNodeId}`);
     if (boundNodeId) {
       bridgeConnections.delete(boundNodeId);
-      for (const [rId, rInfo] of activeRunsMap.entries()) {
-        if (rInfo.nodeId === boundNodeId) {
-          activeRunsMap.delete(rId);
-        }
+      for (const rInfo of [...activeRunsMap.values()]) {
+        if (rInfo.nodeId === boundNodeId) endRunNode(rInfo.runId, boundNodeId, false);
       }
       setTimeout(() => {
         if (!bridgeConnections.has(boundNodeId)) {
@@ -580,81 +795,16 @@ wssUI.on('connection', (ws) => {
 
   // Send initial fleet state
   ws.send(JSON.stringify({ type: 'FLEET_STATE', payload: getFleetPayload() }));
+  ws.send(JSON.stringify({ type: 'APP_STATE', payload: appSnapshot() }));
+  ws.send(JSON.stringify({ type: 'LOGS_SNAPSHOT', payload: { logs } }));
 
   ws.on('message', (rawData) => {
     try {
       const msg = JSON.parse(rawData.toString());
       const { type, payload } = msg;
+      if (handleAppIntent(type, payload || {}, ws)) return;
 
       switch (type) {
-        case 'TRIGGER_RUN': {
-          const runReq = payload as RunBatchPayload;
-          const targetWs = bridgeConnections.get(runReq.nodeId);
-          if (targetWs && targetWs.readyState === WebSocket.OPEN) {
-            activeRunsMap.set(runReq.runId, {
-              runId: runReq.runId,
-              nodeId: runReq.nodeId,
-              devices: runReq.devices,
-              tools: runReq.tools,
-              startedAt: Date.now()
-            });
-
-            targetWs.send(
-              JSON.stringify({
-                type: 'TriggerRun',
-                payload: {
-                  run_id: runReq.runId,
-                  devices: runReq.devices,
-                  tools: runReq.tools,
-                  concurrency: runReq.concurrency || 1,
-                  update: runReq.update || false
-                }
-              })
-            );
-
-            if (fleetState.nodes[runReq.nodeId]) {
-              if (!fleetState.nodes[runReq.nodeId].activeRuns.includes(runReq.runId)) {
-                fleetState.nodes[runReq.nodeId].activeRuns.push(runReq.runId);
-              }
-            }
-            broadcastFleetState();
-          } else {
-            ws.send(
-              JSON.stringify({
-                type: 'ACTION_RESPONSE',
-                payload: {
-                  nodeId: runReq.nodeId,
-                  action: 'trigger_run',
-                  success: false,
-                  message: `Node ${runReq.nodeId} is offline or not connected`
-                }
-              })
-            );
-          }
-          break;
-        }
-
-        case 'CANCEL_RUN': {
-          activeRunsMap.delete(payload.runId);
-          if (payload.nodeId && fleetState.nodes[payload.nodeId]) {
-            fleetState.nodes[payload.nodeId].activeRuns = fleetState.nodes[payload.nodeId].activeRuns.filter(
-              (id) => id !== payload.runId
-            );
-          }
-          broadcastFleetState();
-
-          const targetWs = bridgeConnections.get(payload.nodeId);
-          if (targetWs && targetWs.readyState === WebSocket.OPEN) {
-            targetWs.send(
-              JSON.stringify({
-                type: 'CancelRun',
-                payload: { run_id: payload.runId }
-              })
-            );
-          }
-          break;
-        }
-
         case 'PREFLIGHT': {
           const targetWs = bridgeConnections.get(payload.nodeId);
           if (targetWs && targetWs.readyState === WebSocket.OPEN) {
