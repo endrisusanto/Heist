@@ -1,4 +1,4 @@
-/* ATM GBA Hub Design Language System (Light & Dark Theme with Smooth Fadeaway) */
+/* ATM GBA Hub Design Language System (Light & Dark Theme) */
 :root {
   --bg-page: #f8fafc;
   --bg-card: #ffffff;
@@ -42,11 +42,12 @@
   --gray-pill-text: #64748b;
   --gray-pill-border: #e2e8f0;
 
-  --radius-boxy: 4px;
-  --radius-boxy-md: 6px;
+  --radius-boxy: 6px;
+  --radius-boxy-sm: 4px;
+  --radius-card: 8px;
   --radius-pill: 9999px;
 
-  --shadow-card: 0 1px 3px 0 rgba(0, 0, 0, 0.06), 0 1px 2px 0 rgba(0, 0, 0, 0.04);
+  --shadow-card: 0 1px 3px 0 rgba(0, 0, 0, 0.05), 0 1px 2px 0 rgba(0, 0, 0, 0.03);
   --shadow-modal: 0 20px 25px -5px rgba(0, 0, 0, 0.2), 0 10px 10px -5px rgba(0, 0, 0, 0.1);
 
   --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -98,15 +99,9 @@
   -webkit-tap-highlight-color: transparent;
 }
 
-/* Smooth Fadeaway Theme Transition */
-html, body, .dashboard-card, .hub-header, .hub-filter-bar, .custom-select, .search-input-wrap input,
-.btn-terminal-toggle, .sub-accordion-box, .sub-accordion-header, table, th, td, .stat-pill-tag,
-.stat-pill-btn, .filter-chip, .pill-pc-id, .status-pill, .type-pill, .count-pill-sm, .model-badge-tag,
-.archive-pill-link, .icon-circle-btn, .btn, .btn-green, .btn-green-sm, .btn-outline-sm {
-  transition: background-color 0.25s cubic-bezier(0.16, 1, 0.3, 1),
-              border-color 0.25s cubic-bezier(0.16, 1, 0.3, 1),
-              color 0.25s cubic-bezier(0.16, 1, 0.3, 1),
-              box-shadow 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+/* Smooth Fadeaway Theme Transition without reflow lag */
+body, .app-layout, .dashboard-card, .hub-header, .hub-filter-bar, .sub-accordion-box, .sub-accordion-header, table, th, td, .terminal-modal-window, .terminal-modal-header, .stat-pill-tag, .stat-pill-btn, .custom-select, .search-input-wrap input, .btn-terminal-toggle {
+  transition: background-color 0.22s ease, border-color 0.22s ease, color 0.22s ease;
 }
 
 html, body {
@@ -156,6 +151,7 @@ html, body {
   align-items: center;
   justify-content: center;
   border: 1px solid var(--border-card);
+  flex-shrink: 0;
 }
 
 .brand-logo-img {
@@ -185,7 +181,7 @@ html, body {
 
 /* Pillshape Badges for Header Stats */
 .stat-pill-tag {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 6px;
   background: var(--bg-card);
@@ -195,6 +191,7 @@ html, body {
   font-size: 11px;
   color: var(--text-muted);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
+  white-space: nowrap;
 }
 
 .stat-pill-tag strong {
@@ -203,7 +200,7 @@ html, body {
 }
 
 .stat-pill-btn {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 6px;
   background: var(--bg-card);
@@ -214,6 +211,7 @@ html, body {
   color: var(--text-heading);
   cursor: pointer;
   font-weight: 600;
+  white-space: nowrap;
 }
 
 .stat-pill-btn:hover {
@@ -254,7 +252,7 @@ html, body {
 [data-theme="dark"] .theme-icon-moon { display: none; }
 [data-theme="dark"] .theme-icon-sun { display: block; }
 
-/* 2. Sub-Header Filter Bar (Card Enclosed Layout from Screenshot 2) */
+/* 2. Sub-Header Filter Bar (Card Enclosed Layout from Screenshot) */
 .hub-filter-bar {
   display: flex;
   align-items: center;
@@ -264,7 +262,7 @@ html, body {
   padding: 6px 8px;
   background: var(--bg-card);
   border: 1px solid var(--border-card);
-  border-radius: var(--radius-boxy-md);
+  border-radius: var(--radius-card);
   box-shadow: var(--shadow-card);
   flex-wrap: wrap;
 }
@@ -272,7 +270,7 @@ html, body {
 .search-input-wrap {
   position: relative;
   flex: 1;
-  min-width: 280px;
+  min-width: 260px;
 }
 
 .search-svg {
@@ -331,6 +329,7 @@ html, body {
   color: var(--text-heading);
   font-size: 11.5px;
   font-family: inherit;
+  font-weight: 500;
   outline: none;
   cursor: pointer;
   appearance: none;
@@ -343,7 +342,7 @@ html, body {
 
 /* Boxy Terminal Logs Button */
 .btn-terminal-toggle {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 6px;
   height: 32px;
@@ -356,6 +355,7 @@ html, body {
   font-weight: 600;
   cursor: pointer;
   position: relative;
+  white-space: nowrap;
 }
 
 .btn-terminal-toggle:hover {
@@ -388,7 +388,7 @@ html, body {
 .dashboard-card {
   background: var(--bg-card);
   border: 1px solid var(--border-card);
-  border-radius: var(--radius-boxy-md);
+  border-radius: var(--radius-card);
   box-shadow: var(--shadow-card);
   overflow: hidden;
 }
@@ -500,6 +500,7 @@ html, body {
   font-family: inherit;
   border: none;
   cursor: pointer;
+  white-space: nowrap;
 }
 
 .btn-green {
@@ -524,6 +525,7 @@ html, body {
   align-items: center;
   gap: 5px;
   font-weight: 600;
+  white-space: nowrap;
 }
 
 .btn-green-sm:hover:not(:disabled) {
@@ -548,6 +550,7 @@ html, body {
   align-items: center;
   gap: 5px;
   font-weight: 500;
+  white-space: nowrap;
 }
 
 .btn-outline-sm:hover {
@@ -579,7 +582,7 @@ html, body {
 /* Sub-Accordion inside Workflow */
 .sub-accordion-box {
   border: 1px solid var(--border-card);
-  border-radius: var(--radius-boxy-md);
+  border-radius: var(--radius-card);
   margin-bottom: 12px;
   background: var(--bg-card);
   overflow: hidden;
@@ -755,6 +758,7 @@ input:checked + .switch-slider:before {
   font-weight: 700;
   letter-spacing: 0.3px;
   text-transform: uppercase;
+  white-space: nowrap;
 }
 
 .status-pill.ready, .status-pill.passed, .status-pill.finished {
@@ -810,6 +814,7 @@ input:checked + .switch-slider:before {
   font-weight: 700;
   padding: 2px 8px;
   border-radius: var(--radius-pill);
+  white-space: nowrap;
 }
 
 .badge-res.pass {
@@ -835,7 +840,8 @@ input:checked + .switch-slider:before {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 10px;
+  height: 26px;
+  padding: 0 10px;
   border-radius: var(--radius-pill);
   border: 1px solid var(--border-card);
   background: var(--bg-card);
@@ -843,10 +849,13 @@ input:checked + .switch-slider:before {
   font-size: 11px;
   font-weight: 600;
   cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
 }
 
 .filter-chip svg {
   color: var(--text-muted);
+  flex-shrink: 0;
 }
 
 .filter-chip.active svg {
@@ -864,10 +873,15 @@ input:checked + .switch-slider:before {
 }
 
 .chip-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
   font-size: 9.5px;
   font-weight: 700;
   background: rgba(0, 0, 0, 0.08);
-  padding: 1px 6px;
+  padding: 0 5px;
   border-radius: var(--radius-pill);
 }
 
@@ -886,6 +900,7 @@ input:checked + .switch-slider:before {
   font-size: 10.5px;
   font-weight: 600;
   color: var(--text-heading);
+  white-space: nowrap;
 }
 
 .model-title-wrap {
@@ -905,6 +920,7 @@ input:checked + .switch-slider:before {
   padding: 2px 8px;
   border-radius: var(--radius-pill);
   text-transform: uppercase;
+  white-space: nowrap;
 }
 
 .type-pill.user {
@@ -940,6 +956,7 @@ input:checked + .switch-slider:before {
   border-radius: var(--radius-pill);
   font-size: 10px;
   font-weight: 700;
+  white-space: nowrap;
 }
 
 .count-pill-sm.green {
@@ -969,6 +986,7 @@ input:checked + .switch-slider:before {
   border-radius: var(--radius-pill);
   text-decoration: none;
   font-family: var(--font-mono);
+  white-space: nowrap;
 }
 
 .archive-pill-link:hover {
@@ -980,8 +998,8 @@ input:checked + .switch-slider:before {
 .terminal-modal-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.4);
-  backdrop-filter: blur(2px);
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(3px);
   z-index: 999;
   display: flex;
   align-items: center;
@@ -995,7 +1013,7 @@ input:checked + .switch-slider:before {
   height: 480px;
   background: var(--bg-modal);
   border: 1px solid var(--border-card);
-  border-radius: var(--radius-boxy-md);
+  border-radius: var(--radius-card);
   box-shadow: var(--shadow-modal);
   display: flex;
   flex-direction: column;
@@ -1009,7 +1027,7 @@ input:checked + .switch-slider:before {
   max-height: 80vh;
   background: var(--bg-modal);
   border: 1px solid var(--border-card);
-  border-radius: var(--radius-boxy-md);
+  border-radius: var(--radius-card);
   box-shadow: var(--shadow-modal);
   display: flex;
   flex-direction: column;
@@ -1083,7 +1101,7 @@ input:checked + .switch-slider:before {
 .modal-act-btn {
   background: transparent;
   border: 1px solid var(--border-card);
-  border-radius: var(--radius-boxy);
+  border-radius: var(--radius-boxy-sm);
   width: 26px;
   height: 26px;
   display: flex;
@@ -1116,7 +1134,7 @@ input:checked + .switch-slider:before {
   background: transparent;
   border: 1px solid var(--border-card);
   padding: 3px 10px;
-  border-radius: var(--radius-boxy);
+  border-radius: var(--radius-boxy-sm);
   font-size: 10.5px;
   font-weight: 600;
   color: var(--text-muted);
