@@ -135,7 +135,7 @@ interface DeviceWorkflow {
   } | null;
 }
 interface HistoryRecord {
-  id: string; nodeId: string; mode: string; devices: string[]; runtimeSecs: number;
+  id: string; nodeId: string; mode: string; devices: string[]; pda?: string; model?: string; runtimeSecs: number;
   passed: number; failed: number; total: number; status: 'FINISHED' | 'CANCELLED';
   archiveName: string; timestamp: number;
 }
@@ -329,10 +329,16 @@ function finishDeviceRun(serial: string, status: 'FINISHED' | 'CANCELLED') {
   }
 
   let pda = wf.pda || serial;
+  let devModel = wf.model || '';
   for (const node of Object.values(fleetState.nodes)) {
     const dev = (node.devices || []).find((d) => d.serial === serial);
-    const v = dev && [dev.build, dev.csc].find((x) => x && x !== '-' && x !== 'UNKNOWN' && x.trim());
-    if (v) { pda = v.trim(); break; }
+    if (dev) {
+      const v = [dev.build, dev.csc].find((x) => x && x !== '-' && x !== 'UNKNOWN' && x.trim());
+      if (v) { pda = v.trim(); }
+      if (!devModel && dev.model && dev.model !== '-' && dev.model !== 'UNKNOWN') {
+        devModel = dev.model.trim();
+      }
+    }
   }
 
   const total = wf.tools.length;
@@ -353,6 +359,8 @@ function finishDeviceRun(serial: string, status: 'FINISHED' | 'CANCELLED') {
     nodeId: wf.nodeId,
     mode: wf.tools.map((t) => t.toUpperCase()).join(', '),
     devices: [serial],
+    pda,
+    model: devModel,
     runtimeSecs: Math.floor((Date.now() - runInfo.startedAt) / 1000),
     passed: passedCount,
     failed: failedCount,
@@ -652,18 +660,77 @@ const server = http.createServer((req, res) => {
   // Helper functions for Results generation and packaging
   function findLocalResultFolder(model: string, pda: string, toolFolder: string): string | null {
     const candidateRoots = [RESULTS_ROOT];
+    const norm = (s: string) => String(s || '').replace(/[-_]/g, '').toLowerCase().trim();
+    const targetPdaNorm = norm(pda);
+    const targetModelNorm = model ? norm(model) : '';
 
     for (const root of candidateRoots) {
-      const p1 = path.join(root, 'results', model, pda, toolFolder);
-      if (fs.existsSync(p1) && fs.statSync(p1).isDirectory()) return p1;
+      const resultsDir = path.join(root, 'results');
+      if (!fs.existsSync(resultsDir) || !fs.statSync(resultsDir).isDirectory()) continue;
 
-      const modelDir = path.join(root, 'results', model);
-      if (fs.existsSync(modelDir) && fs.statSync(modelDir).isDirectory()) {
-        const subdirs = fs.readdirSync(modelDir);
-        for (const sub of subdirs) {
-          if (sub.toLowerCase() === pda.toLowerCase()) {
-            const p2 = path.join(modelDir, sub, toolFolder);
-            if (fs.existsSync(p2) && fs.statSync(p2).isDirectory()) return p2;
+      // 1. Direct path check if model and pda are provided
+      if (model && pda) {
+        const direct1 = path.join(resultsDir, model, pda, toolFolder);
+        if (fs.existsSync(direct1) && fs.statSync(direct1).isDirectory()) return direct1;
+      }
+
+      // 2. Scan all model directories inside results/
+      let modelDirs: string[] = [];
+      try {
+        modelDirs = fs.readdirSync(resultsDir);
+      } catch {
+        continue;
+      }
+
+      for (const mEntry of modelDirs) {
+        const mPath = path.join(resultsDir, mEntry);
+        try {
+          if (!fs.statSync(mPath).isDirectory()) continue;
+        } catch {
+          continue;
+        }
+
+        const mEntryNorm = norm(mEntry);
+        const modelMatches = !targetModelNorm || mEntryNorm === targetModelNorm || mEntryNorm.includes(targetModelNorm) || targetModelNorm.includes(mEntryNorm);
+
+        // Scan PDA subdirectories inside model directory
+        let pdaDirs: string[] = [];
+        try {
+          pdaDirs = fs.readdirSync(mPath);
+        } catch {
+          continue;
+        }
+
+        for (const pEntry of pdaDirs) {
+          const pPath = path.join(mPath, pEntry);
+          try {
+            if (!fs.statSync(pPath).isDirectory()) continue;
+          } catch {
+            continue;
+          }
+
+          const pEntryNorm = norm(pEntry);
+          const pdaMatches = !targetPdaNorm || pEntryNorm === targetPdaNorm || pEntryNorm.startsWith(targetPdaNorm) || targetPdaNorm.startsWith(pEntryNorm);
+
+          if (pdaMatches) {
+            // Check toolFolder inside pPath
+            let toolDirs: string[] = [];
+            try {
+              toolDirs = fs.readdirSync(pPath);
+            } catch {
+              continue;
+            }
+
+            for (const tEntry of toolDirs) {
+              const tPath = path.join(pPath, tEntry);
+              try {
+                if (fs.statSync(tPath).isDirectory() && tEntry.toLowerCase() === toolFolder.toLowerCase()) {
+                  return tPath;
+                }
+              } catch {
+                continue;
+              }
+            }
           }
         }
       }
@@ -693,19 +760,21 @@ const server = http.createServer((req, res) => {
 
   function getTestcaseZipBuffer(toolName: string, pda: string, model: string): Buffer | null {
     const tLower = toolName.toLowerCase();
-    let folderName = 'Getprop';
-    if (tLower.includes('bvt')) folderName = 'BVT';
-    else if (tLower.includes('svt')) folderName = 'SVT';
-    else if (tLower.includes('sdt')) folderName = 'SDT';
-    else if (tLower.includes('cts') || tLower.includes('ctsv')) folderName = 'CTSVerifier';
-    else if (tLower.includes('getprop')) folderName = 'Getprop';
+    let candidateFolders = ['Getprop'];
+    if (tLower.includes('bvt')) candidateFolders = ['BVT'];
+    else if (tLower.includes('svt')) candidateFolders = ['SVT'];
+    else if (tLower.includes('sdt')) candidateFolders = ['SDT'];
+    else if (tLower.includes('cts') || tLower.includes('ctsv')) candidateFolders = ['CTSVerifier', 'CTSV', 'CTS-V'];
+    else if (tLower.includes('getprop')) candidateFolders = ['Getprop'];
 
     // 1. Try reading real folder from disk if available
-    const localDir = findLocalResultFolder(model, pda, folderName);
-    if (localDir) {
-      const localFiles = readDirectoryFiles(localDir);
-      if (localFiles.length > 0) {
-        return createZipBuffer(localFiles);
+    for (const folderName of candidateFolders) {
+      const localDir = findLocalResultFolder(model, pda, folderName);
+      if (localDir) {
+        const localFiles = readDirectoryFiles(localDir);
+        if (localFiles.length > 0) {
+          return createZipBuffer(localFiles);
+        }
       }
     }
 
@@ -759,9 +828,9 @@ const server = http.createServer((req, res) => {
       }
     }
 
-    // Try extracting PDA from requested filename (e.g. Getprop_A055FXXSIDZI3.zip or ATM_A055FXXSIDZI3.zip)
+    // Try extracting PDA from requested filename (e.g. Getprop_A055FXXSIDZI3.zip or ATM_A055FXXSIDZI3.zip or CTSV_A055FXXSIDZI3.zip)
     if (!pda || pda === 'device' || pda === '-') {
-      const match = requestedFile.match(/^(?:ATM|Getprop|BVT|SVT|SDT)_([^.]+)\.zip$/i);
+      const match = requestedFile.match(/^(?:ATM|Getprop|BVT|SVT|SDT|CTSV|CTSVerifier)_([^.]+)\.zip$/i);
       if (match && match[1]) pda = match[1];
     }
 
@@ -787,11 +856,12 @@ const server = http.createServer((req, res) => {
       return;
     }
 
-    // 2. Individual Testcase Zip Download (Getprop_{PDA}.zip, BVT_{PDA}.zip, SVT_{PDA}.zip, SDT_{PDA}.zip)
+    // 2. Individual Testcase Zip Download (Getprop_{PDA}.zip, BVT_{PDA}.zip, SVT_{PDA}.zip, SDT_{PDA}.zip, CTSV_{PDA}.zip)
     let tcName = 'Getprop';
     if (tool.includes('bvt') || safeName.toLowerCase().startsWith('bvt')) tcName = 'BVT';
     else if (tool.includes('svt') || safeName.toLowerCase().startsWith('svt')) tcName = 'SVT';
     else if (tool.includes('sdt') || safeName.toLowerCase().startsWith('sdt')) tcName = 'SDT';
+    else if (tool.includes('cts') || safeName.toLowerCase().startsWith('cts')) tcName = 'CTSV';
     else if (tool.includes('getprop') || safeName.toLowerCase().startsWith('getprop')) tcName = 'Getprop';
 
     const outTcName = `${tcName}_${pda}.zip`;

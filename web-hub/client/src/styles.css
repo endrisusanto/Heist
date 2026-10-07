@@ -483,6 +483,24 @@ html, body {
   flex-wrap: wrap;
 }
 
+.card-header-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-card-subtle);
+  border: 1px solid var(--border-light);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-body);
+  white-space: nowrap;
+}
+
+.card-header-chip.mono {
+  font-family: var(--font-mono);
+  font-weight: 500;
+}
+
 .accordion-chevron {
   color: var(--text-muted);
   transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
@@ -1184,6 +1202,19 @@ input:checked + .switch-slider:before {
   border-radius: 3px;
   text-transform: capitalize;
   flex-shrink: 0;
+}
+
+.badge-passed {
+  background: rgba(16, 185, 129, 0.18);
+  color: #10b981;
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 3px;
+  text-transform: capitalize;
+  flex-shrink: 0;
+  margin-left: auto;
 }
 
 .empty-dash {

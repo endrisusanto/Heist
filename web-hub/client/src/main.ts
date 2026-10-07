@@ -34,6 +34,8 @@ interface HistoryItem {
   nodeId: string;
   mode: string;
   devices: string[];
+  pda?: string;
+  model?: string;
   runtimeSecs: number;
   passed: number;
   failed: number;
@@ -540,6 +542,9 @@ function renderToolDetail(toolId: string, wf: DeviceWorkflow, isRunning: boolean
   if (toolId === 'ctsv') {
     const ctsvSub = wf.ctsvSubtests || { DeviceOwnerTestsNormal: true, BYODManagedProvisioningNormal: true };
     const count = (ctsvSub.DeviceOwnerTestsNormal ? 1 : 0) + (ctsvSub.BYODManagedProvisioningNormal ? 1 : 0);
+    const status = rowState?.status || 'STANDBY';
+    const isPassed = status === 'PASSED';
+
     return `
       <div class="ctsv-subtests-container">
         <div class="ctsv-subtests-header">${count}/2 selected</div>
@@ -548,12 +553,14 @@ function renderToolDetail(toolId: string, wf: DeviceWorkflow, isRunning: boolean
             <input type="checkbox" class="ctsv-subtest-chk" data-serial="${wf.serial}" data-subtest="DeviceOwnerTestsNormal" ${ctsvSub.DeviceOwnerTestsNormal ? 'checked' : ''} ${isRunning ? 'disabled' : ''} />
             <span>DeviceOwnerTestsNormal</span>
           </label>
+          ${isPassed && ctsvSub.DeviceOwnerTestsNormal ? `<span class="badge-passed">Passed</span>` : ''}
         </div>
         <div class="ctsv-subtest-row">
           <label class="custom-checkbox-label">
             <input type="checkbox" class="ctsv-subtest-chk" data-serial="${wf.serial}" data-subtest="BYODManagedProvisioningNormal" ${ctsvSub.BYODManagedProvisioningNormal ? 'checked' : ''} ${isRunning ? 'disabled' : ''} />
             <span>BYODManagedProvisioningNormal</span>
           </label>
+          ${isPassed && ctsvSub.BYODManagedProvisioningNormal ? `<span class="badge-passed">Passed</span>` : ''}
         </div>
       </div>
     `;
@@ -605,8 +612,8 @@ function renderWorkflows() {
       const activeElapsed = isRunning && wf.run ? Math.max(0, Math.floor((Date.now() - (wf.run.startedAt - clockSkew)) / 1000)) : 0;
       const activeTimeStr = formatTimeDigital(activeElapsed);
       const pda = wf.pda || getDevicePda(wf.serial);
-      const androidVer = getDeviceAndroid(wf.serial);
-      const metaSub = `${pda}${androidVer ? ' · Android ' + androidVer : ''}`;
+      const rawAndroid = getDeviceAndroid(wf.serial);
+      const androidVer = rawAndroid ? rawAndroid.replace(/^Android\s*/i, '').trim() : '';
 
       let rowsHtml = '';
       TOOL_DEFS.forEach((tool) => {
@@ -670,19 +677,19 @@ function renderWorkflows() {
               <svg class="accordion-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
               <div class="card-title-group">
                 <div class="card-title-row">
-                  <h2 class="card-heading">${wf.model || wf.serial}</h2>
+                  <h2 class="card-heading">ATM Workflow ${wf.model || wf.serial}</h2>
                   ${statusPill}
                 </div>
                 <div class="card-meta-chips">
-                  <span class="pill-pc-id">${wf.nodeId || 'Node'}</span>
-                  <span class="serial-mono" style="font-size: 11px; padding: 2px 8px; background: var(--bg-table-header); border: 1px solid var(--border-light); border-radius: var(--radius-pill);">${wf.serial}</span>
-                  <span class="pda-subdesc" style="font-size: 11px;">${metaSub}</span>
+                  <span class="pill-pc-id">${escapeHtml(wf.nodeId || 'Node')}</span>
+                  <span class="card-header-chip mono">${escapeHtml(wf.serial)}</span>
+                  ${pda ? `<span class="card-header-chip mono">${escapeHtml(pda)}</span>` : ''}
+                  ${androidVer ? `<span class="card-header-chip">${escapeHtml(androidVer)}</span>` : ''}
                 </div>
               </div>
             </div>
 
             <div class="card-header-right">
-              <span class="badge-checked-count" style="margin-right: 8px;">${wf.tools.length}/${TOOL_DEFS.length} tercentang</span>
               ${
                 isRunning
                   ? `
@@ -754,6 +761,28 @@ function renderWorkflows() {
       const activeElapsed = isRunning && wf.run ? Math.max(0, Math.floor((Date.now() - (wf.run.startedAt - clockSkew)) / 1000)) : 0;
       const activeTimeStr = formatTimeDigital(activeElapsed);
 
+      // 0. Update Heading & Meta Chips
+      const headingEl = card.querySelector<HTMLElement>('.card-heading');
+      if (headingEl) {
+        const expectedTitle = `ATM Workflow ${wf.model || wf.serial}`;
+        if (headingEl.textContent !== expectedTitle) headingEl.textContent = expectedTitle;
+      }
+      const chipsEl = card.querySelector<HTMLElement>('.card-meta-chips');
+      if (chipsEl) {
+        const pda = wf.pda || getDevicePda(wf.serial);
+        const rawAndroid = getDeviceAndroid(wf.serial);
+        const androidVer = rawAndroid ? rawAndroid.replace(/^Android\s*/i, '').trim() : '';
+        const chipsHtml = `
+          <span class="pill-pc-id">${escapeHtml(wf.nodeId || 'Node')}</span>
+          <span class="card-header-chip mono">${escapeHtml(wf.serial)}</span>
+          ${pda ? `<span class="card-header-chip mono">${escapeHtml(pda)}</span>` : ''}
+          ${androidVer ? `<span class="card-header-chip">${escapeHtml(androidVer)}</span>` : ''}
+        `;
+        if (chipsEl.innerHTML.replace(/\s+/g, ' ') !== chipsHtml.replace(/\s+/g, ' ')) {
+          chipsEl.innerHTML = chipsHtml;
+        }
+      }
+
       // 1. Update Card Status Pill
       const cardStatusEl = card.querySelector<HTMLElement>('.card-header-left .status-pill');
       if (cardStatusEl) {
@@ -763,17 +792,12 @@ function renderWorkflows() {
         if (cardStatusEl.textContent !== nextText) cardStatusEl.textContent = nextText;
       }
 
-      // 2. Update Header Actions & Count Badge
+      // 2. Update Header Actions
       const headerRight = card.querySelector<HTMLElement>('.card-header-right');
       if (headerRight) {
-        const countBadge = headerRight.querySelector<HTMLElement>('.badge-checked-count');
-        if (countBadge) {
-          countBadge.textContent = `${wf.tools.length}/${TOOL_DEFS.length} tercentang`;
-        }
         const wasRunning = headerRight.querySelector('.btn-cancel-device') !== null;
         if (isRunning !== wasRunning) {
           headerRight.innerHTML = `
-            <span class="badge-checked-count" style="margin-right: 8px;">${wf.tools.length}/${TOOL_DEFS.length} tercentang</span>
             ${
               isRunning
                 ? `
@@ -1030,6 +1054,8 @@ function renderHistory() {
   let html = '';
   for (const item of historyList) {
     const isFinished = item.status === 'FINISHED';
+    const itemPda = item.pda || (item.archiveName?.match(/^ATM_([^\.]+)\.zip$/i)?.[1] || '');
+    const itemModel = item.model || '';
     html += `
       <tr data-history-id="${item.id}">
         <td><span class="timestamp-text">${formatTimestamp(item.timestamp)}</span></td>
@@ -1044,7 +1070,7 @@ function renderHistory() {
         <td>
           ${
             isFinished
-              ? `<a href="#" class="archive-pill-link" onclick="window.downloadFile('${item.archiveName}', 'all', '${item.devices[0] || 'device'}', '${item.nodeId}', undefined, undefined, '${item.mode}'); return false;">${item.archiveName}</a>`
+              ? `<a href="#" class="archive-pill-link" onclick="window.downloadFile('${item.archiveName}', 'all', '${item.devices[0] || 'device'}', '${item.nodeId}', '${itemPda}', '${itemModel}', '${item.mode}'); return false;">${item.archiveName}</a>`
               : `<span style="color: var(--text-muted); font-size: 10.5px;">No Zip</span>`
           }
         </td>
