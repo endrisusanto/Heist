@@ -47,6 +47,11 @@ pub fn run_output_with_timeout(mut cmd: Command, timeout: Duration) -> Result<St
     }
 }
 
+use std::sync::Mutex;
+use once_cell::sync::Lazy;
+
+static DEVICE_CACHE: Lazy<Mutex<HashMap<String, DeviceInfo>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+
 pub fn list_devices() -> Result<Vec<DeviceInfo>, String> {
     let adb = adb_path();
     let output = match run_output_with_timeout(
@@ -55,7 +60,7 @@ pub fn list_devices() -> Result<Vec<DeviceInfo>, String> {
             c.args(["devices", "-l"]);
             c
         },
-        Duration::from_secs(6),
+        Duration::from_secs(4),
     ) {
         Ok(out) => out,
         Err(err) => {
@@ -64,6 +69,8 @@ pub fn list_devices() -> Result<Vec<DeviceInfo>, String> {
     };
 
     let mut raw_devices = Vec::new();
+    let mut current_serials = std::collections::HashSet::new();
+
     for line in output.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() || trimmed.starts_with("List of devices") || trimmed.starts_with('*') {
@@ -75,62 +82,88 @@ pub fn list_devices() -> Result<Vec<DeviceInfo>, String> {
         }
         let serial = parts[0].to_string();
         let state = parts[1].to_string();
+        current_serials.insert(serial.clone());
         raw_devices.push((serial, state, trimmed.to_string()));
     }
 
-    let handles: Vec<_> = raw_devices
-        .into_iter()
-        .map(|(serial, state, trimmed)| {
-            let adb_clone = adb.clone();
-            thread::spawn(move || {
-                let props = if state == "device" {
-                    adb_props(&adb_clone, &serial).unwrap_or_default()
-                } else {
-                    HashMap::new()
-                };
-                DeviceInfo {
-                    serial: serial.clone(),
-                    state,
-                    model: first_non_empty(&[
-                        token_value(&trimmed, "model"),
-                        props.get("ro.product.model").cloned().unwrap_or_default(),
-                        props.get("ro.product.vendor.model").cloned().unwrap_or_default(),
-                    ]),
-                    build_type: props.get("ro.build.type").cloned().unwrap_or_default(),
-                    android: first_non_empty(&[
-                        props.get("ro.build.version.release").cloned().unwrap_or_default(),
-                        props.get("ro.system.build.version.release").cloned().unwrap_or_default(),
-                    ]),
-                    build: first_non_empty(&[
-                        props.get("ro.build.version.incremental").cloned().unwrap_or_default(),
-                        props.get("ro.vendor.build.version.incremental").cloned().unwrap_or_default(),
-                    ]),
-                    csc: first_non_empty(&[
-                        props.get("ril.official_cscver").cloned().unwrap_or_default(),
-                        props.get("ro.csc.sales_code").cloned().unwrap_or_default(),
-                    ]),
-                    security_patch: props
-                        .get("ro.build.version.security_patch")
-                        .cloned()
-                        .unwrap_or_default(),
-                    carrier: props.get("ro.csc.sales_code").cloned().unwrap_or_default(),
-                    region: props
-                        .get("ro.product.locale.region")
-                        .cloned()
-                        .unwrap_or_else(|| "INDONESIA".to_string()),
-                    modem: normalize_modem(first_non_empty(&[
-                        props.get("gsm.version.baseband").cloned().unwrap_or_default(),
-                        props.get("ril.modem.board").cloned().unwrap_or_default(),
-                    ])),
-                }
-            })
-        })
-        .collect();
+    // Clean removed devices from cache
+    if let Ok(mut cache) = DEVICE_CACHE.lock() {
+        cache.retain(|k, _| current_serials.contains(k));
+    }
 
     let mut devices = Vec::new();
-    for handle in handles {
-        if let Ok(device) = handle.join() {
-            devices.push(device);
+    let mut to_fetch = Vec::new();
+
+    {
+        let cache = DEVICE_CACHE.lock().unwrap();
+        for (serial, state, trimmed) in raw_devices {
+            if let Some(cached) = cache.get(&serial) {
+                if cached.state == state && cached.model != "UNKNOWN" && cached.model != "-" {
+                    devices.push(cached.clone());
+                    continue;
+                }
+            }
+            to_fetch.push((serial, state, trimmed));
+        }
+    }
+
+    if !to_fetch.is_empty() {
+        let handles: Vec<_> = to_fetch
+            .into_iter()
+            .map(|(serial, state, trimmed)| {
+                let adb_clone = adb.clone();
+                thread::spawn(move || {
+                    let props = if state == "device" {
+                        adb_props(&adb_clone, &serial).unwrap_or_default()
+                    } else {
+                        HashMap::new()
+                    };
+                    DeviceInfo {
+                        serial: serial.clone(),
+                        state,
+                        model: first_non_empty(&[
+                            token_value(&trimmed, "model"),
+                            props.get("ro.product.model").cloned().unwrap_or_default(),
+                            props.get("ro.product.vendor.model").cloned().unwrap_or_default(),
+                        ]),
+                        build_type: props.get("ro.build.type").cloned().unwrap_or_default(),
+                        android: first_non_empty(&[
+                            props.get("ro.build.version.release").cloned().unwrap_or_default(),
+                            props.get("ro.system.build.version.release").cloned().unwrap_or_default(),
+                        ]),
+                        build: first_non_empty(&[
+                            props.get("ro.build.version.incremental").cloned().unwrap_or_default(),
+                            props.get("ro.vendor.build.version.incremental").cloned().unwrap_or_default(),
+                        ]),
+                        csc: first_non_empty(&[
+                            props.get("ril.official_cscver").cloned().unwrap_or_default(),
+                            props.get("ro.csc.sales_code").cloned().unwrap_or_default(),
+                        ]),
+                        security_patch: props
+                            .get("ro.build.version.security_patch")
+                            .cloned()
+                            .unwrap_or_default(),
+                        carrier: props.get("ro.csc.sales_code").cloned().unwrap_or_default(),
+                        region: props
+                            .get("ro.product.locale.region")
+                            .cloned()
+                            .unwrap_or_else(|| "INDONESIA".to_string()),
+                        modem: normalize_modem(first_non_empty(&[
+                            props.get("gsm.version.baseband").cloned().unwrap_or_default(),
+                            props.get("ril.modem.board").cloned().unwrap_or_default(),
+                        ])),
+                    }
+                })
+            })
+            .collect();
+
+        if let Ok(mut cache) = DEVICE_CACHE.lock() {
+            for handle in handles {
+                if let Ok(device) = handle.join() {
+                    cache.insert(device.serial.clone(), device.clone());
+                    devices.push(device);
+                }
+            }
         }
     }
 

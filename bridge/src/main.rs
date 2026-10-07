@@ -255,12 +255,29 @@ async fn ws_connection_loop(app: AppHandle) {
                 }));
 
                 let (mut write, mut read) = ws_stream.split();
+
+                enum OutgoingWs {
+                    Msg(BridgeToHubMessage),
+                    Pong(Vec<u8>),
+                }
+
+                let (tx_ws, mut rx_ws) = mpsc::unbounded_channel::<OutgoingWs>();
                 let (tx, mut rx) = mpsc::unbounded_channel::<BridgeToHubMessage>();
 
                 {
                     let mut guard = state.ws_tx.lock().unwrap();
                     *guard = Some(tx.clone());
                 }
+
+                // BridgeToHubMessage forwarder into OutgoingWs
+                let tx_ws_msg = tx_ws.clone();
+                let fwd_task = tokio::spawn(async move {
+                    while let Some(m) = rx.recv().await {
+                        if tx_ws_msg.send(OutgoingWs::Msg(m)).is_err() {
+                            break;
+                        }
+                    }
+                });
 
                 // Send RegisterNode
                 let register_msg = BridgeToHubMessage::RegisterNode {
@@ -273,10 +290,19 @@ async fn ws_connection_loop(app: AppHandle) {
 
                 // Task for outgoing messages from channel to WebSocket
                 let write_task = tokio::spawn(async move {
-                    while let Some(msg) = rx.recv().await {
-                        if let Ok(json) = serde_json::to_string(&msg) {
-                            if write.send(Message::Text(json)).await.is_err() {
-                                break;
+                    while let Some(out) = rx_ws.recv().await {
+                        match out {
+                            OutgoingWs::Msg(msg) => {
+                                if let Ok(json) = serde_json::to_string(&msg) {
+                                    if write.send(Message::Text(json)).await.is_err() {
+                                        break;
+                                    }
+                                }
+                            }
+                            OutgoingWs::Pong(payload) => {
+                                if write.send(Message::Pong(payload)).await.is_err() {
+                                    break;
+                                }
                             }
                         }
                     }
@@ -306,6 +332,7 @@ async fn ws_connection_loop(app: AppHandle) {
                 });
 
                 // Read loop for incoming commands from Hub
+                let tx_ws_pong = tx_ws.clone();
                 while let Some(msg_res) = read.next().await {
                     match msg_res {
                         Ok(Message::Text(text)) => {
@@ -313,7 +340,8 @@ async fn ws_connection_loop(app: AppHandle) {
                                 handle_hub_command(cmd, &app, tx.clone());
                             }
                         }
-                        Ok(Message::Ping(_)) => {
+                        Ok(Message::Ping(data)) => {
+                            let _ = tx_ws_pong.send(OutgoingWs::Pong(data));
                             let _ = tx.send(BridgeToHubMessage::Heartbeat {
                                 timestamp: std::time::SystemTime::now()
                                     .duration_since(std::time::UNIX_EPOCH)
@@ -329,6 +357,7 @@ async fn ws_connection_loop(app: AppHandle) {
                 }
 
                 write_task.abort();
+                fwd_task.abort();
                 scan_task.abort();
 
                 state.connected.store(false, Ordering::SeqCst);
@@ -351,7 +380,7 @@ async fn ws_connection_loop(app: AppHandle) {
         }
 
         tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
-        backoff_secs = (backoff_secs * 2).min(30);
+        backoff_secs = (backoff_secs + 1).min(5);
     }
 }
 

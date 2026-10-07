@@ -256,8 +256,12 @@ wssBridge.on('connection', (ws, req) => {
     console.log(`[Bridge Disconnected] Node: ${boundNodeId}`);
     if (boundNodeId) {
       bridgeConnections.delete(boundNodeId);
-      delete fleetState.nodes[boundNodeId];
-      broadcastToUI({ type: 'FLEET_STATE', payload: fleetState });
+      setTimeout(() => {
+        if (!bridgeConnections.has(boundNodeId)) {
+          delete fleetState.nodes[boundNodeId];
+          broadcastToUI({ type: 'FLEET_STATE', payload: fleetState });
+        }
+      }, 5000);
     }
   });
 });
