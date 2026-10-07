@@ -425,6 +425,13 @@ html, body {
   gap: 16px;
 }
 
+.workflows-container {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+}
+
 .dashboard-card {
   background: var(--bg-card);
   border: 1px solid var(--border-card);

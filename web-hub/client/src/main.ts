@@ -43,12 +43,29 @@ interface HistoryItem {
   timestamp: number;
 }
 
+interface DeviceWorkflow {
+  serial: string;
+  nodeId: string;
+  model: string;
+  pda: string;
+  buildType: string;
+  tools: string[];
+  toolStatus: Record<string, { status: string; subtext: string; serial?: string; nodeId?: string }>;
+  run: {
+    runId: string;
+    startedAt: number;
+    failed: boolean;
+  } | null;
+}
+
 // State
 let fleet: FleetState = { nodes: {} };
+let workflows: Record<string, DeviceWorkflow> = {};
+const collapsedCardSerials = new Set<string>();
 const selectedStandbySerials = new Set<string>(); // serials checked in Standby table
 
 function isDeviceTesting(serial: string): boolean {
-  if (activeRunDevices.includes(serial)) return true;
+  if (workflows[serial]?.run) return true;
   if (fleet.busyDevices && fleet.busyDevices.includes(serial)) return true;
   for (const node of Object.values(fleet.nodes)) {
     const dev = (node.devices || []).find((d) => d.serial === serial);
@@ -56,19 +73,11 @@ function isDeviceTesting(serial: string): boolean {
   }
   return false;
 }
-const workflowDevices = new Map<string, { serial: string; nodeId: string; model: string; pda: string; buildType: string }>(); // serial -> meta
 
 let selectedModelFilter = 'ALL';
 let globalSearchQuery = '';
 let selectedNodeFilter = 'all';
 let selectedDeviceModeFilter = 'all';
-
-let activeRunId: string | null = null;
-let activeRunStartTime: number | null = null;
-let activeRunTimerInterval: any = null;
-let activeRunNodeId: string = 'syncmaster';
-let activeRunDevices: string[] = [];
-let activeRunTools: string[] = ['getprop', 'bvt', 'svt', 'sdt'];
 
 let ws: WebSocket | null = null;
 interface LogEntry {
@@ -98,17 +107,8 @@ const els = {
   openTerminalLogsBtn: document.getElementById('openTerminalLogsBtn') as HTMLButtonElement,
   terminalActivePulse: document.getElementById('terminalActivePulse') as HTMLElement,
 
-  // Workflow
-  workflowCard: document.getElementById('workflowCard') as HTMLElement,
-  workflowModelChipsWrap: document.getElementById('workflowModelChipsWrap') as HTMLElement,
-  startAutomationBtn: document.getElementById('startAutomationBtn') as HTMLButtonElement,
-  cancelAutomationBtn: document.getElementById('cancelAutomationBtn') as HTMLButtonElement,
-  deleteWorkflowBtn: document.getElementById('deleteWorkflowBtn') as HTMLButtonElement,
-  uncheckAllToolsBtn: document.getElementById('uncheckAllToolsBtn') as HTMLButtonElement,
-  toolSwitches: document.querySelectorAll('.tool-switch') as NodeListOf<HTMLInputElement>,
-  workflowDevicesHeaderTitle: document.getElementById('workflowDevicesHeaderTitle') as HTMLElement,
-  clearAllWorkflowDevsBtn: document.getElementById('clearAllWorkflowDevsBtn') as HTMLButtonElement,
-  workflowDevicesTableBody: document.getElementById('workflowDevicesTableBody') as HTMLElement,
+  // Workflows Container
+  workflowsContainer: document.getElementById('workflowsContainer') as HTMLElement,
 
   // Standby
   standbyCard: document.getElementById('standbyCard') as HTMLElement,
@@ -250,7 +250,7 @@ function handleHubMessage(msg: { type: string; payload: any }) {
 function renderAll() {
   renderStats();
   renderStandbyDevices();
-  renderWorkflow();
+  renderWorkflows();
   renderHistory();
   updateModalControls();
 }
@@ -258,22 +258,19 @@ function renderAll() {
 function renderStats() {
   const nodes = Object.values(fleet.nodes);
   let devCount = 0;
-  let jobCount = 0;
-
   for (const n of nodes) {
     devCount += n.devices?.length || 0;
-    jobCount += n.activeRuns?.length || 0;
+  }
+
+  let jobCount = 0;
+  for (const wf of Object.values(workflows)) {
+    if (wf.run) jobCount++;
   }
 
   els.statNodesCount.textContent = nodes.length.toString();
   els.statDevicesCount.textContent = devCount.toString();
   els.statJobsCount.textContent = jobCount.toString();
-
-  if (activeRunId || jobCount > 0) {
-    els.terminalActivePulse.style.display = 'inline-block';
-  } else {
-    els.terminalActivePulse.style.display = 'none';
-  }
+  els.terminalActivePulse.style.display = jobCount > 0 ? 'inline-block' : 'none';
 }
 
 function updateNodeDropdown() {
@@ -447,186 +444,231 @@ function updateStandbySelectionUI() {
   }
 }
 
-// Workflow Area
-function renderWorkflow() {
-  const count = workflowDevices.size;
+// Workflow Area - Per-device Accordion Cards
+interface ToolDef {
+  id: string;
+  name: string;
+  desc: string;
+}
 
-  // Initial state / Empty state: Hide the entire ATM Workflow card
-  if (count === 0) {
-    els.workflowCard.style.display = 'none';
-    if (els.workflowModelChipsWrap) els.workflowModelChipsWrap.innerHTML = '';
-    els.workflowDevicesHeaderTitle.textContent = `DEVICES (0 Unit)`;
-    els.workflowDevicesTableBody.innerHTML = `<tr><td colspan="5" class="empty-table-cell">Tidak ada perangkat aktif di workflow ini. Pilih perangkat di tabel Standby di bawah.</td></tr>`;
-    els.startAutomationBtn.disabled = true;
+const TOOL_DEFS: ToolDef[] = [
+  {
+    id: 'getprop',
+    name: 'GetpropSnapshot',
+    desc: 'Pengumpulan build properties perangkat (build, csc, carrier, modem).'
+  },
+  {
+    id: 'bvt',
+    name: 'BasicInfoTests',
+    desc: 'Validasi integritas dasar platform, Android boot, build tags & hardware.'
+  },
+  {
+    id: 'svt',
+    name: 'SVTPreloadValidation',
+    desc: 'Validasi preload carrier, binary system apps, CSC packages.'
+  },
+  {
+    id: 'sdt',
+    name: 'SDTDeviceTest',
+    desc: 'Pengujian komprehensif hardware, sensor, display, modem, interface.'
+  }
+];
+
+function renderWorkflows() {
+  const list = Object.values(workflows);
+  if (list.length === 0) {
+    els.workflowsContainer.innerHTML = '';
+    ensureRuntimeInterval();
     return;
   }
 
-  // Show ATM Workflow card when devices are present
-  els.workflowCard.style.display = 'block';
+  let html = '';
+  for (const wf of list) {
+    const isRunning = wf.run !== null;
+    const isBusy = isDeviceTesting(wf.serial) && !isRunning;
+    const isCollapsed = collapsedCardSerials.has(wf.serial);
+    const allChecked = TOOL_DEFS.every((t) => wf.tools.includes(t.id));
+    const activeElapsed = isRunning && wf.run ? Math.max(0, Math.floor((Date.now() - (wf.run.startedAt - clockSkew)) / 1000)) : 0;
+    const activeTimeStr = formatTimeDigital(activeElapsed);
 
-  // Render individual model chips with counts
-  const modelCounts = new Map<string, number>();
-  for (const dev of workflowDevices.values()) {
-    const m = dev.model || 'Unknown';
-    modelCounts.set(m, (modelCounts.get(m) || 0) + 1);
-  }
-  let modelChipsHtml = '';
-  for (const [m, c] of modelCounts.entries()) {
-    modelChipsHtml += `<span class="model-badge-tag">${m} <span class="badge-inner-count">${c}</span></span>`;
-  }
-  if (els.workflowModelChipsWrap) {
-    els.workflowModelChipsWrap.innerHTML = modelChipsHtml;
-  }
+    let rowsHtml = '';
+    TOOL_DEFS.forEach((tool, idx) => {
+      const isSelected = wf.tools.includes(tool.id);
+      const rowState = wf.toolStatus[tool.id];
+      const status: 'STANDBY' | 'RUNNING' | 'PASSED' | 'WARNING' | 'FAILED' = isRunning
+        ? ((rowState?.status as any) || (isSelected ? 'RUNNING' : 'STANDBY'))
+        : ((rowState?.status as any) || 'STANDBY');
+      const subtext = rowState?.subtext || (status === 'RUNNING' ? 'Running automated test...' : tool.desc);
+      const toolUpper = tool.id === 'getprop' ? 'Getprop' : tool.id.toUpperCase();
+      const pda = wf.pda || getDevicePda(wf.serial);
+      const zipName = `${toolUpper}_${pda}.zip`;
 
-  // Render Workflow Devices Table
-  els.workflowDevicesHeaderTitle.textContent = `DEVICES (${count} Unit)`;
-  let devRowsHtml = '';
-  let hasExternalBusyDevice = false;
-  for (const [serial, dev] of workflowDevices.entries()) {
-    const isBusy = isDeviceTesting(serial);
-    if (isBusy && !activeRunDevices.includes(serial)) {
-      hasExternalBusyDevice = true;
-    }
-    const statusPill = isBusy
+      const resultHtml = status === 'PASSED'
+        ? `<button class="btn-download-sm" onclick="window.downloadFile('${zipName}', '${tool.id}', '${wf.serial}', '${wf.nodeId}', '${pda}', '${wf.model}')">Download</button><span class="badge-res pass">Pass 1</span>`
+        : `<button class="btn-download-sm" disabled>Download</button>`;
+
+      rowsHtml += `
+        <tr>
+          <td style="text-align: center;">
+            <span class="row-num-text">${idx + 1}</span>
+          </td>
+          <td>
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <label class="switch-toggle">
+                <input type="checkbox" class="tool-switch" data-serial="${wf.serial}" data-tool="${tool.id}" ${isSelected ? 'checked' : ''} ${isRunning ? 'disabled' : ''} />
+                <span class="switch-slider"></span>
+              </label>
+              <div>
+                <div class="tc-name-bold">${tool.name}</div>
+                <div class="tc-subdesc">[${tool.id.toUpperCase()}]</div>
+              </div>
+            </div>
+          </td>
+          <td>
+            <div class="tc-subtests-col" id="subtest_${wf.serial}_${tool.id}">${subtext}</div>
+          </td>
+          <td>
+            <span id="status_${wf.serial}_${tool.id}" class="status-pill ${status.toLowerCase()}">${status}</span>
+          </td>
+          <td>
+            <span id="time_${wf.serial}_${tool.id}" class="time-col">${isRunning && isSelected ? activeTimeStr : '-'}</span>
+          </td>
+          <td>
+            <div id="res_${wf.serial}_${tool.id}">
+              ${resultHtml}
+            </div>
+          </td>
+        </tr>
+      `;
+    });
+
+    const statusPill = isRunning
       ? `<span class="status-pill running">RUNNING</span>`
+      : isBusy
+      ? `<span class="status-pill warning">BUSY</span>`
       : `<span class="status-pill ready">READY</span>`;
 
-    devRowsHtml += `
-      <tr data-wf-serial="${serial}" class="${isBusy ? 'row-busy' : ''}">
-        <td class="pc-node-cell">
-          <span class="pc-badge-mono">${dev.nodeId || 'Node'}</span>
-        </td>
-        <td>
-          <div class="model-bold">${dev.model || 'Unknown'}</div>
-          <div class="pda-subdesc">${dev.pda || '-'}</div>
-        </td>
-        <td>
-          <span class="serial-code-text">${serial}</span>
-        </td>
-        <td>${statusPill}</td>
-        <td style="text-align: center;">
-          <button class="btn-table-remove" data-remove-serial="${serial}" title="Hapus dari workflow">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M18 6L6 18M6 6l12 12"/></svg>
-          </button>
-        </td>
-      </tr>
+    html += `
+      <div class="dashboard-card ${isCollapsed ? '' : 'expanded'}" data-workflow-serial="${wf.serial}">
+        <div class="card-main-header" data-card-serial="${wf.serial}">
+          <div class="card-header-left">
+            <svg class="accordion-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+            <h2 class="card-heading">ATM WORKFLOW - ${wf.model || 'Device'}</h2>
+            <span class="pill-pc-id">${wf.nodeId || 'Node'}</span>
+            <span class="serial-mono" style="font-size: 11px; padding: 2px 8px; background: var(--bg-table-header); border: 1px solid var(--border-light); border-radius: var(--radius-pill);">${wf.serial}</span>
+            <span class="pda-subdesc" style="font-size: 11px;">${wf.pda || '-'}</span>
+            ${statusPill}
+          </div>
+
+          <div class="card-header-right" onclick="event.stopPropagation()">
+            ${
+              isRunning
+                ? `
+                  <button class="btn btn-danger btn-sm btn-cancel-device" data-serial="${wf.serial}">
+                    <span>Batal</span>
+                  </button>
+                  <button class="btn btn-blue btn-sm running" disabled>
+                    <span>Menjalankan Automasi...</span>
+                  </button>
+                `
+                : `
+                  <button class="btn btn-blue btn-sm btn-start-device" data-serial="${wf.serial}" ${wf.tools.length === 0 || isBusy ? 'disabled' : ''} ${isBusy ? 'title="Perangkat sedang sibuk di sesi lain"' : ''}>
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                    <span>Jalankan Automasi</span>
+                  </button>
+                  <button class="btn-icon-danger btn-remove-device" data-serial="${wf.serial}" title="Hapus dari workflow">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                  </button>
+                `
+            }
+          </div>
+        </div>
+
+        <div class="card-main-body">
+          <div class="sub-accordion-box expanded">
+            <div class="sub-accordion-header" data-toggle-sub="tools">
+              <div class="sub-header-left">
+                <svg class="accordion-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+                <span class="sub-heading-text">ATM TEST SUITES</span>
+              </div>
+              <div class="sub-header-right" onclick="event.stopPropagation()">
+                <button class="sub-action-link btn-toggle-tools" data-serial="${wf.serial}" ${isRunning ? 'disabled style="opacity:0.5;cursor:not-allowed;"' : ''}>
+                  ${allChecked ? 'Uncheck All' : 'Check All'}
+                </button>
+              </div>
+            </div>
+
+            <div class="sub-accordion-content">
+              <div class="table-responsive">
+                <table class="workflow-table">
+                  <thead>
+                    <tr>
+                      <th style="width: 44px; text-align: center;">NO</th>
+                      <th style="width: 240px;">TEST SUITES</th>
+                      <th>TEST DESCRIPTION</th>
+                      <th style="width: 130px;">STATUS</th>
+                      <th style="width: 100px;">RUNTIME</th>
+                      <th style="width: 160px;">RESULT ARCHIVE</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${rowsHtml}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
     `;
   }
-  els.workflowDevicesTableBody.innerHTML = devRowsHtml;
 
-  els.workflowDevicesTableBody.querySelectorAll('[data-remove-serial]').forEach((btn) => {
-    btn.addEventListener('click', (e) => {
-      const s = (e.currentTarget as HTMLElement).dataset.removeSerial!;
-      sendToHub({ type: 'WORKFLOW_REMOVE', payload: { serial: s } });
-    });
-  });
-
-  els.startAutomationBtn.disabled = activeRunId !== null || getSelectedTools().length === 0 || hasExternalBusyDevice;
-  if (hasExternalBusyDevice && activeRunId === null) {
-    els.startAutomationBtn.title = 'Perangkat sedang menjalankan pengujian di sesi lain';
-  } else {
-    els.startAutomationBtn.title = '';
-  }
-}
-
-function getSelectedTools(): string[] {
-  const tools: string[] = [];
-  els.toolSwitches.forEach((sw) => {
-    if (sw.checked) {
-      tools.push(sw.dataset.tool!);
-    }
-  });
-  return tools;
-}
-
-// Test Run Execution (state lives on the hub; this only sends intents and renders it)
-function startAutomation() {
-  sendToHub({ type: 'START_RUN', payload: {} });
-}
-
-function cancelAutomation() {
-  sendToHub({ type: 'CANCEL_RUN', payload: {} });
+  els.workflowsContainer.innerHTML = html;
+  ensureRuntimeInterval();
 }
 
 function applyAppState(st: any) {
   clockSkew = st.serverNow - Date.now();
+  workflows = st.workflows || {};
+  historyList = st.history || [];
 
-  workflowDevices.clear();
-  for (const d of st.workflow.devices) workflowDevices.set(d.serial, d);
-  historyList = st.history;
-
-  els.toolSwitches.forEach((sw) => (sw.checked = st.workflow.tools.includes(sw.dataset.tool!)));
-  els.uncheckAllToolsBtn.textContent = st.workflow.tools.length ? 'Uncheck' : 'Check All';
-
-  const r = st.run;
-  activeRunId = r ? r.runId : null;
-  activeRunStartTime = r ? r.startedAt - clockSkew : null;
-  activeRunDevices = r ? r.devices : [];
-  activeRunNodeId = r ? r.nodeId : activeRunNodeId;
-  if (r) activeRunTools = r.tools;
-
-  for (const tool of Object.keys(TOOL_LABELS)) {
-    const row = st.toolStatus[tool];
-    if (row) setToolRowStatus(tool, row.status, row.subtext, row);
-  }
-
-  applyRunUI();
   renderAll();
 
-  if (scrollToWorkflowOnAdd && workflowDevices.size > 0) {
+  if (scrollToWorkflowOnAdd && Object.keys(workflows).length > 0) {
     scrollToWorkflowOnAdd = false;
-    els.workflowCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    els.workflowsContainer.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 }
 
-function tickRuntime() {
-  if (!activeRunStartTime) return;
-  const elapsed = Math.floor((Date.now() - activeRunStartTime) / 1000);
-  const timeStr = formatTimeDigital(elapsed);
-  activeRunTools.forEach((t) => {
-    const timeEl = document.getElementById(`time_${t}`);
-    if (timeEl) timeEl.textContent = timeStr;
-  });
-  els.modalRuntimeTag.textContent = formatDuration(elapsed);
+let runtimeInterval: number | null = null;
+
+function ensureRuntimeInterval() {
+  const anyRunning = Object.values(workflows).some((w) => w.run !== null);
+  if (anyRunning && !runtimeInterval) {
+    runtimeInterval = window.setInterval(tickAllRuntimes, 1000);
+  } else if (!anyRunning && runtimeInterval) {
+    clearInterval(runtimeInterval);
+    runtimeInterval = null;
+  }
 }
 
-function applyRunUI() {
-  const running = activeRunId !== null;
-  const wasRunning = els.startAutomationBtn.classList.contains('running');
-
-  if (activeRunTimerInterval) {
-    clearInterval(activeRunTimerInterval);
-    activeRunTimerInterval = null;
+function tickAllRuntimes() {
+  for (const wf of Object.values(workflows)) {
+    if (!wf.run) continue;
+    const elapsed = Math.max(0, Math.floor((Date.now() - (wf.run.startedAt - clockSkew)) / 1000));
+    const timeStr = formatTimeDigital(elapsed);
+    for (const toolId of wf.tools) {
+      const el = document.getElementById(`time_${wf.serial}_${toolId}`);
+      if (el) el.textContent = timeStr;
+    }
   }
 
-  els.startAutomationBtn.classList.toggle('running', running);
-
-  if (running) {
-    els.startAutomationBtn.disabled = true;
-    els.startAutomationBtn.innerHTML = `<span>Menjalankan Automasi...</span>`;
-    els.cancelAutomationBtn.style.display = 'inline-flex';
-    els.terminalActivePulse.style.display = 'inline-block';
-    els.modalRunStatusBadge.textContent = '[RUNNING]';
-    els.modalRunStatusBadge.className = 'modal-status-badge running';
-    if (els.modalNodeIdLabel) els.modalNodeIdLabel.textContent = activeRunNodeId;
-    tickRuntime();
-    activeRunTimerInterval = setInterval(tickRuntime, 1000);
-    return;
-  }
-
-  if (wasRunning) {
-    els.startAutomationBtn.innerHTML = `
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-    <span>Jalankan Automasi</span>
-  `;
-    els.startAutomationBtn.style.display = 'inline-flex';
-  }
-  els.cancelAutomationBtn.style.display = 'none';
-
-  const last = historyList[0];
-  if (last) {
-    els.modalRunStatusBadge.textContent = `[${last.status}]`;
-    els.modalRunStatusBadge.className = `modal-status-badge ${last.status.toLowerCase()}`;
+  const runningList = Object.values(workflows).filter((w) => w.run);
+  if (runningList.length > 0 && els.modalRuntimeTag) {
+    const maxElapsed = Math.max(
+      ...runningList.map((w) => Math.max(0, Math.floor((Date.now() - (w.run!.startedAt - clockSkew)) / 1000)))
+    );
+    els.modalRuntimeTag.textContent = formatDuration(maxElapsed);
   }
 }
 
@@ -676,36 +718,6 @@ function getDeviceModel(serial: string): string {
   link.click();
   document.body.removeChild(link);
 };
-
-function setToolRowStatus(tool: string, status: 'STANDBY' | 'RUNNING' | 'PASSED' | 'WARNING' | 'FAILED', subtext: string, row?: { serial?: string; nodeId?: string }) {
-  const statusEl = document.getElementById(`status_${tool}`);
-  const subtestEl = document.getElementById(`subtest_${tool}`);
-  const resEl = document.getElementById(`res_${tool}`);
-
-  if (statusEl) {
-    statusEl.textContent = status;
-    statusEl.className = `status-pill ${status.toLowerCase()}`;
-  }
-
-  if (subtestEl) {
-    subtestEl.textContent = subtext;
-  }
-
-  if (resEl) {
-    if (status === 'PASSED') {
-      const devSerial = row?.serial || 'device';
-      const pda = getDevicePda(devSerial);
-      const toolUpper = tool.toLowerCase() === 'getprop' ? 'Getprop' : tool.toUpperCase();
-      const zipName = `${toolUpper}_${pda}.zip`;
-      resEl.innerHTML = `
-        <button class="btn-download-sm" onclick="window.downloadFile('${zipName}', '${tool}', '${devSerial}', '${row?.nodeId || ''}', '${pda}')">Download</button>
-        <span class="badge-res pass">Pass 1</span>
-      `;
-    } else if (status === 'STANDBY') {
-      resEl.innerHTML = `<button class="btn-download-sm" disabled>Download</button>`;
-    }
-  }
-}
 
 function formatModeChips(modeStr: string): string {
   if (!modeStr) return `<span class="mode-chip gray">-</span>`;
@@ -794,38 +806,48 @@ function renderHistory() {
   });
 }
 
-const TOOL_LABELS: Record<string, string> = {
-  getprop: 'GetpropSnapshot',
-  bvt: 'BasicInfoTests',
-  svt: 'SVTPreloadValidation',
-  sdt: 'SDTDeviceTest',
-};
-
 // Terminal Modal Controls & Filters
 function updateModalControls() {
+  const runningList = Object.values(workflows).filter((w) => w.run);
   if (els.modalNodeIdLabel) {
-    const activeNode = activeRunNodeId || (selectedNodeFilter !== 'all' ? selectedNodeFilter : Object.keys(fleet.nodes)[0] || 'syncmaster');
+    const activeNode = runningList[0]?.nodeId || (selectedNodeFilter !== 'all' ? selectedNodeFilter : Object.keys(fleet.nodes)[0] || 'syncmaster');
     els.modalNodeIdLabel.textContent = activeNode;
   }
 
-  // 1. Devices: ONLY display devices currently queued/active in the workflow
+  if (els.modalRunStatusBadge) {
+    if (runningList.length > 0) {
+      els.modalRunStatusBadge.textContent = '[RUNNING]';
+      els.modalRunStatusBadge.className = 'modal-status-badge running';
+    } else {
+      const last = historyList[0];
+      if (last) {
+        els.modalRunStatusBadge.textContent = `[${last.status}]`;
+        els.modalRunStatusBadge.className = `modal-status-badge ${last.status.toLowerCase()}`;
+      } else {
+        els.modalRunStatusBadge.textContent = '[IDLE]';
+        els.modalRunStatusBadge.className = 'modal-status-badge idle';
+      }
+    }
+  }
+
+  // 1. Devices: display devices currently queued/active in the workflows
   if (els.modalDeviceSelect) {
     const currentVal = selectedModalDevice;
     els.modalDeviceSelect.innerHTML = '<option value="all">Semua Perangkat Workflow</option>';
     
-    // Only devices in workflow (or active run); fallback to connected only if workflow is completely empty
-    const workflowDevList = workflowDevices.size > 0
-      ? Array.from(workflowDevices.values()).map(d => ({ serial: d.serial, model: d.model }))
-      : getAllConnectedDevices().map(d => ({ serial: d.device.serial, model: d.device.model }));
+    const wfList = Object.values(workflows);
+    const devList = wfList.length > 0
+      ? wfList.map((d) => ({ serial: d.serial, model: d.model }))
+      : getAllConnectedDevices().map((d) => ({ serial: d.device.serial, model: d.device.model }));
 
-    for (const dev of workflowDevList) {
+    for (const dev of devList) {
       const opt = document.createElement('option');
       opt.value = dev.serial;
       opt.textContent = `${dev.model || 'Device'} (${dev.serial})`;
       els.modalDeviceSelect.appendChild(opt);
     }
 
-    if (Array.from(els.modalDeviceSelect.options).some(o => o.value === currentVal)) {
+    if (Array.from(els.modalDeviceSelect.options).some((o) => o.value === currentVal)) {
       els.modalDeviceSelect.value = currentVal;
     } else {
       els.modalDeviceSelect.value = 'all';
@@ -833,18 +855,12 @@ function updateModalControls() {
     }
   }
 
-  // 2. Testcase Chips: ONLY display chips for testcases currently selected/checked in the workflow
+  // 2. Testcase Chips: display chips for testcases
   if (els.modalTestcaseChips) {
-    const activeTools = getSelectedTools();
-    if (selectedModalTc !== 'all' && !activeTools.includes(selectedModalTc)) {
-      selectedModalTc = 'all';
-    }
-
     let chipsHtml = `<button class="terminal-tc-chip ${selectedModalTc === 'all' ? 'active' : ''}" data-tc="all">ALL</button>`;
-    for (const tool of activeTools) {
-      const label = TOOL_LABELS[tool] || tool.toUpperCase();
-      const isActive = selectedModalTc === tool;
-      chipsHtml += `<button class="terminal-tc-chip ${isActive ? 'active' : ''}" data-tc="${tool}">${label}</button>`;
+    for (const t of TOOL_DEFS) {
+      const isActive = selectedModalTc === t.id;
+      chipsHtml += `<button class="terminal-tc-chip ${isActive ? 'active' : ''}" data-tc="${t.id}">${t.id.toUpperCase()}</button>`;
     }
 
     els.modalTestcaseChips.innerHTML = chipsHtml;
@@ -852,7 +868,7 @@ function updateModalControls() {
     // Attach click events to dynamic testcase chips
     els.modalTestcaseChips.querySelectorAll('.terminal-tc-chip').forEach((chipBtn) => {
       chipBtn.addEventListener('click', (e) => {
-        els.modalTestcaseChips.querySelectorAll('.terminal-tc-chip').forEach(c => c.classList.remove('active'));
+        els.modalTestcaseChips.querySelectorAll('.terminal-tc-chip').forEach((c) => c.classList.remove('active'));
         const clicked = e.currentTarget as HTMLElement;
         clicked.classList.add('active');
         selectedModalTc = clicked.dataset.tc || 'all';
@@ -1015,33 +1031,84 @@ function setupEventListeners() {
     renderStandbyDevices();
   });
 
-  // Uncheck All Tools
-  els.uncheckAllToolsBtn.addEventListener('click', () => {
-    const tools = getSelectedTools().length > 0 ? [] : Object.keys(TOOL_LABELS);
-    sendToHub({ type: 'SET_TOOLS', payload: { tools } });
+  // Workflows Container Event Delegation (Clicks)
+  els.workflowsContainer.addEventListener('click', (e) => {
+    const target = e.target as HTMLElement;
+
+    // Toggle Card Accordion
+    const cardHeader = target.closest<HTMLElement>('.card-main-header[data-card-serial]');
+    if (cardHeader && !target.closest('.card-header-right')) {
+      const serial = cardHeader.dataset.cardSerial!;
+      const card = cardHeader.closest<HTMLElement>('.dashboard-card');
+      if (card) {
+        if (card.classList.contains('expanded')) {
+          card.classList.remove('expanded');
+          collapsedCardSerials.add(serial);
+        } else {
+          card.classList.add('expanded');
+          collapsedCardSerials.delete(serial);
+        }
+      }
+      return;
+    }
+
+    // Toggle Sub-Accordion (Test Suites)
+    const subHeader = target.closest<HTMLElement>('.sub-accordion-header');
+    if (subHeader && !target.closest('.sub-header-right')) {
+      const box = subHeader.closest<HTMLElement>('.sub-accordion-box');
+      if (box) box.classList.toggle('expanded');
+      return;
+    }
+
+    // Start Device Run
+    const startBtn = target.closest<HTMLButtonElement>('.btn-start-device');
+    if (startBtn && startBtn.dataset.serial) {
+      sendToHub({ type: 'START_RUN', payload: { serial: startBtn.dataset.serial } });
+      return;
+    }
+
+    // Cancel Device Run
+    const cancelBtn = target.closest<HTMLButtonElement>('.btn-cancel-device');
+    if (cancelBtn && cancelBtn.dataset.serial) {
+      sendToHub({ type: 'CANCEL_RUN', payload: { serial: cancelBtn.dataset.serial } });
+      return;
+    }
+
+    // Remove Device from Workflow
+    const removeBtn = target.closest<HTMLButtonElement>('.btn-remove-device');
+    if (removeBtn && removeBtn.dataset.serial) {
+      sendToHub({ type: 'WORKFLOW_REMOVE', payload: { serial: removeBtn.dataset.serial } });
+      return;
+    }
+
+    // Toggle Tools (Check/Uncheck All for device)
+    const toggleToolsBtn = target.closest<HTMLButtonElement>('.btn-toggle-tools');
+    if (toggleToolsBtn && toggleToolsBtn.dataset.serial) {
+      const serial = toggleToolsBtn.dataset.serial;
+      const wf = workflows[serial];
+      if (wf) {
+        const allChecked = TOOL_DEFS.every((t) => wf.tools.includes(t.id));
+        const tools = allChecked ? [] : TOOL_DEFS.map((t) => t.id);
+        sendToHub({ type: 'SET_TOOLS', payload: { serial, tools } });
+      }
+      return;
+    }
   });
 
-  els.toolSwitches.forEach((sw) => {
-    sw.addEventListener('change', () => {
-      sendToHub({ type: 'SET_TOOLS', payload: { tools: getSelectedTools() } });
-    });
+  // Workflows Container Event Delegation (Tool Switches)
+  els.workflowsContainer.addEventListener('change', (e) => {
+    const target = e.target as HTMLInputElement;
+    if (target && target.classList.contains('tool-switch')) {
+      const serial = target.dataset.serial;
+      if (!serial) return;
+      const card = target.closest<HTMLElement>('.dashboard-card');
+      if (!card) return;
+      const checkedTools = Array.from(card.querySelectorAll<HTMLInputElement>('.tool-switch:checked')).map(
+        (sw) => sw.dataset.tool!
+      );
+      sendToHub({ type: 'SET_TOOLS', payload: { serial, tools: checkedTools } });
+    }
   });
-
-  // Clear All Workflow Devices
-  if (els.clearAllWorkflowDevsBtn) {
-    els.clearAllWorkflowDevsBtn.addEventListener('click', () => {
-      sendToHub({ type: 'WORKFLOW_CLEAR', payload: {} });
-    });
-  }
-
-  // Delete Workflow
-  els.deleteWorkflowBtn.addEventListener('click', () => {
-    sendToHub({ type: 'WORKFLOW_CLEAR', payload: {} });
-  });
-
-  // Execution buttons
-  els.startAutomationBtn.addEventListener('click', startAutomation);
-  els.cancelAutomationBtn.addEventListener('click', cancelAutomation);
 
   // Clear History
   els.clearAllHistoryBtn.addEventListener('click', () => {
