@@ -90,7 +90,6 @@ const els = {
   workflowDevicesList: document.getElementById('workflowDevicesList') as HTMLElement,
   workflowResultsHeaderTitle: document.getElementById('workflowResultsHeaderTitle') as HTMLElement,
   workflowResultsList: document.getElementById('workflowResultsList') as HTMLElement,
-  addWorkflowBtn: document.getElementById('addWorkflowBtn') as HTMLButtonElement,
 
   // Standby
   standbyCard: document.getElementById('standbyCard') as HTMLElement,
@@ -418,39 +417,46 @@ function updateStandbySelectionUI() {
 // Workflow Area
 function renderWorkflow() {
   const count = workflowDevices.size;
-  els.workflowUnitCount.textContent = `${count}/${count} Unit`;
 
-  const models = Array.from(new Set(Array.from(workflowDevices.values()).map(d => d.model)));
-  els.workflowModelTag.textContent = models.length > 0 ? models.join(', ') : 'FP448';
-
-  // Render Workflow Devices List
+  // Initial state / Empty state: Hide the entire ATM Workflow card
   if (count === 0) {
+    els.workflowCard.style.display = 'none';
+    els.workflowUnitCount.textContent = `0/0 Unit`;
     els.workflowDevicesHeaderTitle.textContent = `DEVICES (0 Unit)`;
     els.workflowDevicesList.innerHTML = `<div class="empty-sub-placeholder">Tidak ada perangkat aktif di workflow ini. Centang perangkat di tabel Standby dan klik [Add to Workflow].</div>`;
     els.startAutomationBtn.disabled = true;
-  } else {
-    els.workflowDevicesHeaderTitle.textContent = `DEVICES (${count} Unit)`;
-    let devChipsHtml = '';
-    for (const [serial, dev] of workflowDevices.entries()) {
-      devChipsHtml += `
-        <div class="workflow-dev-chip">
-          <span>${dev.nodeId} / <strong>${dev.model}</strong> (${serial})</span>
-          <button class="btn-remove-dev-chip" data-remove-serial="${serial}" title="Remove">&times;</button>
-        </div>
-      `;
-    }
-    els.workflowDevicesList.innerHTML = devChipsHtml;
-
-    els.workflowDevicesList.querySelectorAll('[data-remove-serial]').forEach((btn) => {
-      btn.addEventListener('click', (e) => {
-        const s = (e.currentTarget as HTMLElement).dataset.removeSerial!;
-        workflowDevices.delete(s);
-        renderWorkflow();
-      });
-    });
-
-    els.startAutomationBtn.disabled = activeRunId !== null || getSelectedTools().length === 0;
+    return;
   }
+
+  // Show ATM Workflow card when devices are present
+  els.workflowCard.style.display = 'block';
+  els.workflowUnitCount.textContent = `${count}/${count} Unit`;
+
+  const models = Array.from(new Set(Array.from(workflowDevices.values()).map((d) => d.model || 'Unknown')));
+  els.workflowModelTag.textContent = models.length > 0 ? models.join(', ') : 'FP448';
+
+  // Render Workflow Devices List
+  els.workflowDevicesHeaderTitle.textContent = `DEVICES (${count} Unit)`;
+  let devChipsHtml = '';
+  for (const [serial, dev] of workflowDevices.entries()) {
+    devChipsHtml += `
+      <div class="workflow-dev-chip">
+        <span>${dev.nodeId} / <strong>${dev.model}</strong> (${serial})</span>
+        <button class="btn-remove-dev-chip" data-remove-serial="${serial}" title="Remove">&times;</button>
+      </div>
+    `;
+  }
+  els.workflowDevicesList.innerHTML = devChipsHtml;
+
+  els.workflowDevicesList.querySelectorAll('[data-remove-serial]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      const s = (e.currentTarget as HTMLElement).dataset.removeSerial!;
+      workflowDevices.delete(s);
+      renderWorkflow();
+    });
+  });
+
+  els.startAutomationBtn.disabled = activeRunId !== null || getSelectedTools().length === 0;
 }
 
 function getSelectedTools(): string[] {
@@ -812,7 +818,12 @@ function setupEventListeners() {
       const buildType = target.dataset.type!;
       workflowDevices.set(serial, { serial, nodeId, model, pda, buildType });
     });
+    selectedStandbySerials.clear();
     renderWorkflow();
+    renderStandbyDevices();
+    if (workflowDevices.size > 0) {
+      els.workflowCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
   });
 
   // Reset Busy
@@ -823,8 +834,8 @@ function setupEventListeners() {
 
   // Uncheck All Tools
   els.uncheckAllToolsBtn.addEventListener('click', () => {
-    const allChecked = Array.from(els.toolSwitches).some(s => s.checked);
-    els.toolSwitches.forEach(s => s.checked = !allChecked);
+    const allChecked = Array.from(els.toolSwitches).some((s) => s.checked);
+    els.toolSwitches.forEach((s) => (s.checked = !allChecked));
     els.uncheckAllToolsBtn.textContent = allChecked ? 'Check All' : 'Uncheck';
     renderWorkflow();
   });
@@ -844,7 +855,7 @@ function setupEventListeners() {
         nodeId,
         model: device.model,
         pda: device.build,
-        buildType: device.build_type
+        buildType: device.build_type,
       });
     }
     renderWorkflow();
@@ -854,11 +865,7 @@ function setupEventListeners() {
   els.deleteWorkflowBtn.addEventListener('click', () => {
     workflowDevices.clear();
     renderWorkflow();
-  });
-
-  // Add Workflow
-  els.addWorkflowBtn.addEventListener('click', () => {
-    alert('Workflow baru ditambahkan.');
+    renderStandbyDevices();
   });
 
   // Execution buttons
