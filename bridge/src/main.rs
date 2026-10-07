@@ -22,20 +22,35 @@ use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::Message;
 use types::{BridgeConfig, BridgeToHubMessage, HubToBridgeMessage};
 
+static LOG_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 struct AppState {
     config: std::sync::Mutex<BridgeConfig>,
     runner: RunnerState,
     ws_tx: std::sync::Mutex<Option<mpsc::UnboundedSender<BridgeToHubMessage>>>,
     connected: AtomicBool,
     status_detail: std::sync::Mutex<String>,
+    device_count: std::sync::atomic::AtomicUsize,
+    recent_logs: std::sync::Mutex<Vec<serde_json::Value>>,
     reconnect_notify: Arc<Notify>,
 }
 
 pub fn emit_log(app: &AppHandle, level: &str, message: &str) {
-    let _ = app.emit("bridge-log", serde_json::json!({
+    let id = LOG_SEQ.fetch_add(1, Ordering::SeqCst);
+    let log_obj = serde_json::json!({
+        "id": id,
         "level": level,
         "message": message
-    }));
+    });
+    if let Some(state) = app.try_state::<AppState>() {
+        if let Ok(mut guard) = state.recent_logs.lock() {
+            guard.push(log_obj.clone());
+            if guard.len() > 100 {
+                guard.remove(0);
+            }
+        }
+    }
+    let _ = app.emit("bridge-log", log_obj);
 }
 
 #[tauri::command]
@@ -49,12 +64,17 @@ fn get_status(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
     let connected = state.connected.load(Ordering::SeqCst);
     let detail = state.status_detail.lock().unwrap().clone();
     let cfg = state.config.lock().map_err(|e| e.to_string())?.clone();
+    let count = state.device_count.load(Ordering::SeqCst);
+    let logs = state.recent_logs.lock().unwrap().clone();
     Ok(serde_json::json!({
         "status": if connected { "connected" } else { "disconnected" },
         "detail": detail,
+        "connected": connected,
         "node_id": cfg.node_id,
         "hub_url": cfg.hub_url,
         "atm_root": cfg.atm_root,
+        "device_count": count,
+        "logs": logs,
     }))
 }
 
@@ -147,6 +167,8 @@ fn main() {
         ws_tx: std::sync::Mutex::new(None),
         connected: AtomicBool::new(false),
         status_detail: std::sync::Mutex::new("Initializing bridge agent".to_string()),
+        device_count: std::sync::atomic::AtomicUsize::new(0),
+        recent_logs: std::sync::Mutex::new(Vec::new()),
         reconnect_notify: Arc::new(Notify::new()),
     };
 
@@ -383,6 +405,9 @@ async fn ws_connection_loop(app: AppHandle) {
                             .unwrap_or_default();
 
                         let count = devices.len();
+                        if let Some(state) = app_scanner.try_state::<AppState>() {
+                            state.device_count.store(count, Ordering::SeqCst);
+                        }
                         let _ = app_scanner.emit("device-count-update", count);
                         if count != last_count {
                             last_count = count;

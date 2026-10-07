@@ -3,6 +3,7 @@ const invoke = tauri?.core?.invoke || (async () => {});
 const event = tauri?.event;
 
 const MAX_LOGS = 400;
+const seenLogIds = new Set();
 
 const els = {
   statusDot: document.getElementById('statusDot'),
@@ -53,6 +54,7 @@ function appendLog(level, msg) {
 }
 
 function updateStatus(status, detail) {
+  if (!els.statusDot || !els.statusTitle || !els.statusDetail) return;
   els.statusDot.className = 'status-indicator';
   if (status === 'connected') {
     els.statusDot.classList.add('connected');
@@ -68,6 +70,29 @@ function updateStatus(status, detail) {
   }
 }
 
+async function refreshStatus() {
+  try {
+    const status = await invoke('get_status');
+    if (status) {
+      updateStatus(status.status, status.detail);
+      if (typeof status.device_count === 'number' && els.deviceCount) {
+        const count = status.device_count;
+        els.deviceCount.textContent = `${count} device${count === 1 ? '' : 's'} connected`;
+      }
+      if (Array.isArray(status.logs)) {
+        for (const log of status.logs) {
+          if (log && log.id && !seenLogIds.has(log.id)) {
+            seenLogIds.add(log.id);
+            appendLog(log.level || 'info', log.message || '');
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.error('Failed to get status:', err);
+  }
+}
+
 async function init() {
   try {
     const config = await invoke('get_config');
@@ -77,14 +102,15 @@ async function init() {
       els.atmRoot.value = config.atm_root || '';
       appendLog('sys', `Loaded configuration for node "${config.node_id || 'unknown'}"`);
     }
-
-    const currentStatus = await invoke('get_status');
-    if (currentStatus) {
-      updateStatus(currentStatus.status, currentStatus.detail);
-    }
   } catch (err) {
-    appendLog('error', `Failed to load bridge config/status: ${err}`);
+    appendLog('error', `Failed to load bridge config: ${err}`);
   }
+
+  // Immediate status refresh
+  await refreshStatus();
+
+  // Periodic polling every 1 second ensures UI never goes out of sync
+  setInterval(refreshStatus, 1000);
 
   els.browseBtn.addEventListener('click', async () => {
     try {
@@ -113,6 +139,9 @@ async function init() {
       });
       updateStatus('connecting', 'Reconnecting with new settings...');
       appendLog('info', `Settings saved. Reconnecting to ${els.hubUrl.value.trim()}`);
+      setTimeout(refreshStatus, 400);
+      setTimeout(refreshStatus, 1000);
+      setTimeout(refreshStatus, 2000);
     } catch (err) {
       appendLog('error', `Error saving config: ${err}`);
       alert('Error saving config: ' + err);
@@ -137,24 +166,33 @@ async function init() {
     }
   });
 
-  if (event) {
-    event.listen('bridge-status', (e) => {
-      const payload = e.payload || {};
-      updateStatus(payload.status, payload.detail);
-      if (payload.detail) {
-        appendLog(payload.status === 'connected' ? 'success' : (payload.status === 'disconnected' ? 'warn' : 'info'), payload.detail);
-      }
-    });
+  if (event && typeof event.listen === 'function') {
+    try {
+      event.listen('bridge-status', (e) => {
+        const payload = e.payload || {};
+        updateStatus(payload.status, payload.detail);
+        if (payload.detail) {
+          appendLog(payload.status === 'connected' ? 'success' : (payload.status === 'disconnected' ? 'warn' : 'info'), payload.detail);
+        }
+      });
 
-    event.listen('device-count-update', (e) => {
-      const count = e.payload || 0;
-      els.deviceCount.textContent = `${count} device${count === 1 ? '' : 's'} connected`;
-    });
+      event.listen('device-count-update', (e) => {
+        const count = e.payload || 0;
+        if (els.deviceCount) {
+          els.deviceCount.textContent = `${count} device${count === 1 ? '' : 's'} connected`;
+        }
+      });
 
-    event.listen('bridge-log', (e) => {
-      const payload = e.payload || {};
-      appendLog(payload.level || 'info', payload.message || '');
-    });
+      event.listen('bridge-log', (e) => {
+        const payload = e.payload || {};
+        if (payload.id && !seenLogIds.has(payload.id)) {
+          seenLogIds.add(payload.id);
+          appendLog(payload.level || 'info', payload.message || '');
+        }
+      });
+    } catch (err) {
+      console.warn('Tauri event listen error (polling fallback active):', err);
+    }
   }
 }
 
