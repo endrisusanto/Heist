@@ -829,7 +829,9 @@ wssBridge.on('connection', (ws, req) => {
           break;
         }
 
+        case 'ActionResult':
         case 'ActionResponse': {
+          pushLog(`[${boundNodeId}] Action ${payload.action}: ${payload.message}`, payload.success ? 'success' : 'err');
           broadcastToUI({
             type: 'ACTION_RESPONSE',
             payload: {

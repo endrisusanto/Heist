@@ -140,6 +140,7 @@ const els = {
   // Preflight Modal
   preflightModal: document.getElementById('preflightModal') as HTMLElement,
   closePreflightModal: document.getElementById('closePreflightModal') as HTMLButtonElement,
+  updateToolsBtn: document.getElementById('updateToolsBtn') as HTMLButtonElement | null,
   preflightReportsContainer: document.getElementById('preflightReportsContainer') as HTMLElement,
 };
 
@@ -241,6 +242,12 @@ function handleHubMessage(msg: { type: string; payload: any }) {
     case 'ACTION_RESPONSE': {
       const isSuccess = payload.success;
       appendModalLog(`[${payload.nodeId}] Action ${payload.action}: ${payload.message}`, isSuccess ? 'sys' : 'err');
+      if (els.preflightModal && els.preflightModal.style.display !== 'none') {
+        const block = document.createElement('div');
+        block.className = 'diag-node-block';
+        block.innerHTML = `<strong>Node ${payload.nodeId} [${payload.action}]</strong>:\n<span style="color: ${isSuccess ? '#10b981' : '#ef4444'}; font-weight: 600;">${payload.message}</span>`;
+        els.preflightReportsContainer.appendChild(block);
+      }
       break;
     }
   }
@@ -1327,6 +1334,35 @@ function setupEventListeners() {
       runPreflightForNode(n.nodeId);
     }
   });
+
+  if (els.updateToolsBtn) {
+    els.updateToolsBtn.addEventListener('click', () => {
+      const nodes = Object.values(fleet.nodes);
+      if (nodes.length === 0) {
+        alert('Tidak ada PC Node yang terhubung.');
+        return;
+      }
+      const btn = els.updateToolsBtn!;
+      btn.disabled = true;
+      const originalHtml = btn.innerHTML;
+      btn.innerHTML = `<span>Updating...</span>`;
+
+      for (const n of nodes) {
+        const block = document.createElement('div');
+        block.className = 'diag-node-block';
+        block.innerHTML = `<span style="color: var(--accent-blue); font-weight: 600;">[Update Tools] Requesting ATM tools update for node <strong>${n.nodeId}</strong>...</span>`;
+        els.preflightReportsContainer.appendChild(block);
+        sendToHub({ type: 'UPDATE_TOOLS', payload: { nodeId: n.nodeId } });
+      }
+
+      setTimeout(() => {
+        if (els.updateToolsBtn) {
+          els.updateToolsBtn.disabled = false;
+          els.updateToolsBtn.innerHTML = originalHtml;
+        }
+      }, 4000);
+    });
+  }
 
   els.closePreflightModal.addEventListener('click', () => {
     els.preflightModal.style.display = 'none';

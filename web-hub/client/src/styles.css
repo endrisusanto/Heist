@@ -1712,6 +1712,19 @@ input:checked + .switch-slider:before {
   white-space: pre-wrap;
 }
 
+.diag-node-block {
+  padding: 10px 12px;
+  background: var(--bg-table-header);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  margin-bottom: 10px;
+  line-height: 1.5;
+}
+
+.diag-node-block:last-child {
+  margin-bottom: 0;
+}
+
 /* Workflow Devices Table */
 .workflow-dev-table {
   width: 100%;
