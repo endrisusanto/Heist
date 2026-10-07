@@ -77,8 +77,13 @@ async function init() {
       els.atmRoot.value = config.atm_root || '';
       appendLog('sys', `Loaded configuration for node "${config.node_id || 'unknown'}"`);
     }
+
+    const currentStatus = await invoke('get_status');
+    if (currentStatus) {
+      updateStatus(currentStatus.status, currentStatus.detail);
+    }
   } catch (err) {
-    appendLog('error', `Failed to load bridge config: ${err}`);
+    appendLog('error', `Failed to load bridge config/status: ${err}`);
   }
 
   els.browseBtn.addEventListener('click', async () => {

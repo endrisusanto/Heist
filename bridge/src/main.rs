@@ -10,11 +10,12 @@ use futures_util::{SinkExt, StreamExt};
 use runner::RunnerState;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, State};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Notify};
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
@@ -26,6 +27,8 @@ struct AppState {
     runner: RunnerState,
     ws_tx: std::sync::Mutex<Option<mpsc::UnboundedSender<BridgeToHubMessage>>>,
     connected: AtomicBool,
+    status_detail: std::sync::Mutex<String>,
+    reconnect_notify: Arc<Notify>,
 }
 
 pub fn emit_log(app: &AppHandle, level: &str, message: &str) {
@@ -42,6 +45,20 @@ fn get_config(state: State<'_, AppState>) -> Result<BridgeConfig, String> {
 }
 
 #[tauri::command]
+fn get_status(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
+    let connected = state.connected.load(Ordering::SeqCst);
+    let detail = state.status_detail.lock().unwrap().clone();
+    let cfg = state.config.lock().map_err(|e| e.to_string())?.clone();
+    Ok(serde_json::json!({
+        "status": if connected { "connected" } else { "disconnected" },
+        "detail": detail,
+        "node_id": cfg.node_id,
+        "hub_url": cfg.hub_url,
+        "atm_root": cfg.atm_root,
+    }))
+}
+
+#[tauri::command]
 fn save_config(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -53,10 +70,16 @@ fn save_config(
     }
     save_config_to_disk(&config);
     emit_log(&app, "info", &format!("Config saved. Node ID: {}, Hub: {}", config.node_id, config.hub_url));
+    
+    let detail = format!("Reconnecting to {}", config.hub_url);
+    *state.status_detail.lock().unwrap() = detail.clone();
     let _ = app.emit("bridge-status", serde_json::json!({
         "status": "connecting",
-        "detail": format!("Reconnecting to {}", config.hub_url)
+        "detail": detail
     }));
+
+    // Trigger immediate reconnection
+    state.reconnect_notify.notify_waiters();
     Ok(())
 }
 
@@ -82,6 +105,11 @@ fn trigger_self_update(download_url: Option<String>) -> Result<String, String> {
 }
 
 fn config_path() -> PathBuf {
+    if let Ok(home) = std::env::var("HOME") {
+        let dir = PathBuf::from(home).join(".config").join("heist");
+        let _ = std::fs::create_dir_all(&dir);
+        return dir.join("bridge_config.json");
+    }
     if let Ok(mut dir) = std::env::current_exe() {
         dir.pop();
         let local = dir.join("heist_bridge_config.json");
@@ -118,6 +146,8 @@ fn main() {
         runner: runner_state.clone(),
         ws_tx: std::sync::Mutex::new(None),
         connected: AtomicBool::new(false),
+        status_detail: std::sync::Mutex::new("Initializing bridge agent".to_string()),
+        reconnect_notify: Arc::new(Notify::new()),
     };
 
     tauri::Builder::default()
@@ -201,6 +231,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             get_config,
+            get_status,
             save_config,
             browse_atm_root,
             hide_window,
@@ -212,6 +243,11 @@ fn main() {
 
 async fn ws_connection_loop(app: AppHandle) {
     let mut backoff_secs = 1u64;
+
+    let reconnect_notify = {
+        let state = app.state::<AppState>();
+        state.reconnect_notify.clone()
+    };
 
     loop {
         let (hub_url, bridge_token, node_id, atm_root) = {
@@ -225,10 +261,15 @@ async fn ws_connection_loop(app: AppHandle) {
             )
         };
 
-        let _ = app.emit("bridge-status", serde_json::json!({
-            "status": "connecting",
-            "detail": format!("Connecting to {hub_url}...")
-        }));
+        let detail_connecting = format!("Connecting to {hub_url}...");
+        {
+            let state = app.state::<AppState>();
+            *state.status_detail.lock().unwrap() = detail_connecting.clone();
+            let _ = app.emit("bridge-status", serde_json::json!({
+                "status": "connecting",
+                "detail": detail_connecting
+            }));
+        }
         emit_log(&app, "info", &format!("Connecting to WebSocket hub at {}...", hub_url));
 
         let mut req = match hub_url.clone().into_client_request() {
@@ -236,11 +277,18 @@ async fn ws_connection_loop(app: AppHandle) {
             Err(e) => {
                 let err_msg = format!("Invalid URL: {e}");
                 emit_log(&app, "error", &err_msg);
+                let state = app.state::<AppState>();
+                *state.status_detail.lock().unwrap() = err_msg.clone();
                 let _ = app.emit("bridge-status", serde_json::json!({
                     "status": "disconnected",
                     "detail": err_msg
                 }));
-                tokio::time::sleep(Duration::from_secs(5)).await;
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_secs(5)) => {},
+                    _ = reconnect_notify.notified() => {
+                        backoff_secs = 1;
+                    }
+                }
                 continue;
             }
         };
@@ -260,9 +308,11 @@ async fn ws_connection_loop(app: AppHandle) {
                 let state = app.state::<AppState>();
                 state.connected.store(true, Ordering::SeqCst);
 
+                let detail_connected = format!("Connected to {hub_url}");
+                *state.status_detail.lock().unwrap() = detail_connected.clone();
                 let _ = app.emit("bridge-status", serde_json::json!({
                     "status": "connected",
-                    "detail": format!("Connected to {hub_url}")
+                    "detail": detail_connected
                 }));
                 emit_log(&app, "success", &format!("Connected to Hub as node '{}'", node_id));
 
@@ -348,28 +398,35 @@ async fn ws_connection_loop(app: AppHandle) {
                     }
                 });
 
-                // Read loop for incoming commands from Hub
+                // Read loop for incoming commands from Hub with cancellation on reconnect_notify
                 let tx_ws_pong = tx_ws.clone();
-                while let Some(msg_res) = read.next().await {
-                    match msg_res {
-                        Ok(Message::Text(text)) => {
-                            if let Ok(cmd) = serde_json::from_str::<HubToBridgeMessage>(&text) {
-                                handle_hub_command(cmd, &app, tx.clone());
+                loop {
+                    tokio::select! {
+                        msg_res = read.next() => {
+                            match msg_res {
+                                Some(Ok(Message::Text(text))) => {
+                                    if let Ok(cmd) = serde_json::from_str::<HubToBridgeMessage>(&text) {
+                                        handle_hub_command(cmd, &app, tx.clone());
+                                    }
+                                }
+                                Some(Ok(Message::Ping(data))) => {
+                                    let _ = tx_ws_pong.send(OutgoingWs::Pong(data));
+                                    let _ = tx.send(BridgeToHubMessage::Heartbeat {
+                                        timestamp: std::time::SystemTime::now()
+                                            .duration_since(std::time::UNIX_EPOCH)
+                                            .unwrap()
+                                            .as_secs(),
+                                        active_runs: 0,
+                                    });
+                                }
+                                None | Some(Ok(Message::Close(_))) | Some(Err(_)) => break,
+                                _ => {}
                             }
                         }
-                        Ok(Message::Ping(data)) => {
-                            let _ = tx_ws_pong.send(OutgoingWs::Pong(data));
-                            let _ = tx.send(BridgeToHubMessage::Heartbeat {
-                                timestamp: std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .unwrap()
-                                    .as_secs(),
-                                active_runs: 0,
-                            });
+                        _ = reconnect_notify.notified() => {
+                            emit_log(&app, "info", "Reconnecting to Hub with updated settings...");
+                            break;
                         }
-                        Ok(Message::Close(_)) => break,
-                        Err(_) => break,
-                        _ => {}
                     }
                 }
 
@@ -383,6 +440,7 @@ async fn ws_connection_loop(app: AppHandle) {
                     *guard = None;
                 }
 
+                *state.status_detail.lock().unwrap() = "Connection closed".to_string();
                 emit_log(&app, "warn", "Connection to Hub closed. Reconnecting...");
                 let _ = app.emit("bridge-status", serde_json::json!({
                     "status": "disconnected",
@@ -392,6 +450,8 @@ async fn ws_connection_loop(app: AppHandle) {
             Err(e) => {
                 let err_msg = format!("Connect failed: {e}. Retry in {backoff_secs}s");
                 emit_log(&app, "error", &err_msg);
+                let state = app.state::<AppState>();
+                *state.status_detail.lock().unwrap() = err_msg.clone();
                 let _ = app.emit("bridge-status", serde_json::json!({
                     "status": "disconnected",
                     "detail": err_msg
@@ -399,7 +459,12 @@ async fn ws_connection_loop(app: AppHandle) {
             }
         }
 
-        tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
+        tokio::select! {
+            _ = tokio::time::sleep(Duration::from_secs(backoff_secs)) => {},
+            _ = reconnect_notify.notified() => {
+                backoff_secs = 1;
+            }
+        }
         backoff_secs = (backoff_secs + 1).min(5);
     }
 }
