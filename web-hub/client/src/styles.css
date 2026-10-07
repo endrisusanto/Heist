@@ -1089,9 +1089,10 @@ input:checked + .switch-slider:before {
 }
 
 .terminal-modal-window {
-  width: 100%;
-  max-width: 720px;
-  height: 480px;
+  width: 92vw;
+  max-width: 1060px;
+  height: 640px;
+  max-height: 85vh;
   background: var(--bg-modal);
   border: 1px solid var(--border-card);
   border-radius: var(--radius-card);

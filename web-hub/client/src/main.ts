@@ -118,6 +118,7 @@ const els = {
   modalRunStatusBadge: document.getElementById('modalRunStatusBadge') as HTMLElement,
   modalNodeIdLabel: document.getElementById('modalNodeIdLabel') as HTMLElement,
   modalDeviceSelect: document.getElementById('modalDeviceSelect') as HTMLSelectElement,
+  modalTestcaseChips: document.getElementById('modalTestcaseChips') as HTMLElement,
   modalRuntimeTag: document.getElementById('modalRuntimeTag') as HTMLElement,
   modalClearLogBtn: document.getElementById('modalClearLogBtn') as HTMLButtonElement,
   modalCopyLogBtn: document.getElementById('modalCopyLogBtn') as HTMLButtonElement,
@@ -770,6 +771,13 @@ function saveHistoryToDisk(list: HistoryItem[]) {
   } catch (e) {}
 }
 
+const TOOL_LABELS: Record<string, string> = {
+  getprop: 'GetpropSnapshot',
+  bvt: 'BasicInfoTests',
+  svt: 'SVTPreloadValidation',
+  sdt: 'SDTDeviceTest',
+};
+
 // Terminal Modal Controls & Filters
 function updateModalControls() {
   if (els.modalNodeIdLabel) {
@@ -777,22 +785,57 @@ function updateModalControls() {
     els.modalNodeIdLabel.textContent = activeNode;
   }
 
+  // 1. Devices: ONLY display devices currently queued/active in the workflow
   if (els.modalDeviceSelect) {
     const currentVal = selectedModalDevice;
-    els.modalDeviceSelect.innerHTML = '<option value="all">Semua Perangkat</option>';
-    const allDevs = getAllConnectedDevices();
-    for (const { device } of allDevs) {
+    els.modalDeviceSelect.innerHTML = '<option value="all">Semua Perangkat Workflow</option>';
+    
+    // Only devices in workflow (or active run); fallback to connected only if workflow is completely empty
+    const workflowDevList = workflowDevices.size > 0
+      ? Array.from(workflowDevices.values()).map(d => ({ serial: d.serial, model: d.model }))
+      : getAllConnectedDevices().map(d => ({ serial: d.device.serial, model: d.device.model }));
+
+    for (const dev of workflowDevList) {
       const opt = document.createElement('option');
-      opt.value = device.serial;
-      opt.textContent = `${device.model || 'Device'} (${device.serial})`;
+      opt.value = dev.serial;
+      opt.textContent = `${dev.model || 'Device'} (${dev.serial})`;
       els.modalDeviceSelect.appendChild(opt);
     }
+
     if (Array.from(els.modalDeviceSelect.options).some(o => o.value === currentVal)) {
       els.modalDeviceSelect.value = currentVal;
     } else {
       els.modalDeviceSelect.value = 'all';
       selectedModalDevice = 'all';
     }
+  }
+
+  // 2. Testcase Chips: ONLY display chips for testcases currently selected/checked in the workflow
+  if (els.modalTestcaseChips) {
+    const activeTools = getSelectedTools();
+    if (selectedModalTc !== 'all' && !activeTools.includes(selectedModalTc)) {
+      selectedModalTc = 'all';
+    }
+
+    let chipsHtml = `<button class="terminal-tc-chip ${selectedModalTc === 'all' ? 'active' : ''}" data-tc="all">ALL</button>`;
+    for (const tool of activeTools) {
+      const label = TOOL_LABELS[tool] || tool.toUpperCase();
+      const isActive = selectedModalTc === tool;
+      chipsHtml += `<button class="terminal-tc-chip ${isActive ? 'active' : ''}" data-tc="${tool}">${label}</button>`;
+    }
+
+    els.modalTestcaseChips.innerHTML = chipsHtml;
+
+    // Attach click events to dynamic testcase chips
+    els.modalTestcaseChips.querySelectorAll('.terminal-tc-chip').forEach((chipBtn) => {
+      chipBtn.addEventListener('click', (e) => {
+        els.modalTestcaseChips.querySelectorAll('.terminal-tc-chip').forEach(c => c.classList.remove('active'));
+        const clicked = e.currentTarget as HTMLElement;
+        clicked.classList.add('active');
+        selectedModalTc = clicked.dataset.tc || 'all';
+        renderModalConsole();
+      });
+    });
   }
 }
 
