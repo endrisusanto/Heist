@@ -884,7 +884,7 @@ html, body {
 
 .history-table {
   width: 100%;
-  min-width: 720px;
+  min-width: 860px;
 }
 
 table {
@@ -1621,10 +1621,19 @@ input:checked + .switch-slider:before {
 
 /* History Mode Chips */
 .history-mode-cell {
-  display: flex;
-  flex-wrap: wrap;
+  display: inline-flex;
+  flex-wrap: nowrap;
   gap: 4px;
   align-items: center;
+  white-space: nowrap;
+}
+
+.timestamp-text {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 .mode-chip {

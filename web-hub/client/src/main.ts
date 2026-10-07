@@ -801,6 +801,19 @@ function formatModeChips(modeStr: string): string {
     .join(' ');
 }
 
+function formatTimestamp(ts?: number): string {
+  if (!ts) return '-';
+  const d = new Date(ts);
+  const pad = (n: number) => n.toString().padStart(2, '0');
+  const year = d.getFullYear();
+  const month = pad(d.getMonth() + 1);
+  const day = pad(d.getDate());
+  const hours = pad(d.getHours());
+  const mins = pad(d.getMinutes());
+  const secs = pad(d.getSeconds());
+  return `${year}-${month}-${day} ${hours}:${mins}:${secs}`;
+}
+
 // History
 function renderHistory() {
   els.historyCountBadge.textContent = historyList.length.toString();
@@ -808,7 +821,7 @@ function renderHistory() {
   if (historyList.length === 0) {
     els.historyTableBody.innerHTML = `
       <tr>
-        <td colspan="10" class="empty-table-cell">Belum ada riwayat pengujian.</td>
+        <td colspan="11" class="empty-table-cell">Belum ada riwayat pengujian.</td>
       </tr>
     `;
     return;
@@ -819,6 +832,7 @@ function renderHistory() {
     const isFinished = item.status === 'FINISHED';
     html += `
       <tr data-history-id="${item.id}">
+        <td><span class="timestamp-text">${formatTimestamp(item.timestamp)}</span></td>
         <td><span class="pill-pc-id">${item.nodeId}</span></td>
         <td class="history-mode-cell">${formatModeChips(item.mode)}</td>
         <td><span class="pill-pc-id">${item.devices[0] || 'device'}</span></td>
