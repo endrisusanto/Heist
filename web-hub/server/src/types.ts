@@ -1,5 +1,5 @@
 export interface DeviceInfo {
-  serial: String;
+  serial: string;
   state: string;
   model: string;
   build_type: string;
@@ -10,6 +10,7 @@ export interface DeviceInfo {
   carrier: string;
   region: string;
   modem: string;
+  busy?: boolean;
 }
 
 export interface NodeState {
@@ -22,8 +23,18 @@ export interface NodeState {
   activeRuns: string[];
 }
 
+export interface ActiveRun {
+  runId: string;
+  nodeId: string;
+  devices: string[];
+  tools: string[];
+  startedAt: number;
+}
+
 export interface FleetState {
   nodes: Record<string, NodeState>;
+  activeRuns?: Record<string, ActiveRun>;
+  busyDevices?: string[];
 }
 
 export interface RunBatchPayload {

@@ -916,6 +916,25 @@ tbody tr:last-child td {
   font-size: 11px;
 }
 
+.standby-dev-check {
+  cursor: pointer;
+  accent-color: var(--primary-red);
+}
+
+.standby-dev-check:disabled {
+  cursor: not-allowed;
+  opacity: 0.35;
+  filter: grayscale(1);
+}
+
+tr.row-busy td {
+  background: rgba(59, 130, 246, 0.035);
+}
+
+[data-theme="dark"] tr.row-busy td {
+  background: rgba(59, 130, 246, 0.06);
+}
+
 /* Toggle Switches */
 .switch-toggle {
   position: relative;

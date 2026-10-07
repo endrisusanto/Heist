@@ -35,9 +35,47 @@ const fleetState: FleetState = {
   nodes: {}
 };
 
+// Server-side active runs map (runId -> ActiveRun)
+const activeRunsMap = new Map<string, import('./types.js').ActiveRun>();
+
 // WebSocket connections
 const bridgeConnections = new Map<string, WebSocket>(); // nodeId -> WebSocket
 const uiConnections = new Set<WebSocket>();
+
+function getFleetPayload(): FleetState {
+  const busySerials = new Set<string>();
+  for (const r of activeRunsMap.values()) {
+    for (const d of r.devices) {
+      busySerials.add(d);
+    }
+  }
+
+  const nodesCopy: Record<string, NodeState> = {};
+  for (const [nId, node] of Object.entries(fleetState.nodes)) {
+    nodesCopy[nId] = {
+      ...node,
+      devices: (node.devices || []).map((dev) => ({
+        ...dev,
+        busy: busySerials.has(dev.serial)
+      }))
+    };
+  }
+
+  const activeRunsObj: Record<string, import('./types.js').ActiveRun> = {};
+  for (const [rId, rInfo] of activeRunsMap.entries()) {
+    activeRunsObj[rId] = rInfo;
+  }
+
+  return {
+    nodes: nodesCopy,
+    activeRuns: activeRunsObj,
+    busyDevices: Array.from(busySerials)
+  };
+}
+
+function broadcastFleetState() {
+  broadcastToUI({ type: 'FLEET_STATE', payload: getFleetPayload() });
+}
 
 // Ring buffer for logs (run_id -> lines[])
 const logBuffers = new Map<string, string[]>();
@@ -625,7 +663,7 @@ wssBridge.on('connection', (ws, req) => {
             activeRuns: fleetState.nodes[boundNodeId]?.activeRuns || []
           };
           console.log(`[Bridge Registered] Node: ${boundNodeId} (${payload.os})`);
-          broadcastToUI({ type: 'FLEET_STATE', payload: fleetState });
+          broadcastFleetState();
           break;
         }
 
@@ -633,7 +671,7 @@ wssBridge.on('connection', (ws, req) => {
           if (boundNodeId && fleetState.nodes[boundNodeId]) {
             fleetState.nodes[boundNodeId].devices = payload.devices || [];
             fleetState.nodes[boundNodeId].lastSeen = Date.now();
-            broadcastToUI({ type: 'FLEET_STATE', payload: fleetState });
+            broadcastFleetState();
           }
           break;
         }
@@ -652,6 +690,7 @@ wssBridge.on('connection', (ws, req) => {
         }
 
         case 'RunFinished': {
+          activeRunsMap.delete(payload.run_id);
           if (boundNodeId && fleetState.nodes[boundNodeId]) {
             fleetState.nodes[boundNodeId].activeRuns = fleetState.nodes[boundNodeId].activeRuns.filter(
               (id) => id !== payload.run_id
@@ -664,7 +703,7 @@ wssBridge.on('connection', (ws, req) => {
               ...payload
             }
           });
-          broadcastToUI({ type: 'FLEET_STATE', payload: fleetState });
+          broadcastFleetState();
           break;
         }
 
@@ -706,12 +745,18 @@ wssBridge.on('connection', (ws, req) => {
     console.log(`[Bridge Disconnected] Node: ${boundNodeId}`);
     if (boundNodeId) {
       bridgeConnections.delete(boundNodeId);
+      for (const [rId, rInfo] of activeRunsMap.entries()) {
+        if (rInfo.nodeId === boundNodeId) {
+          activeRunsMap.delete(rId);
+        }
+      }
       setTimeout(() => {
         if (!bridgeConnections.has(boundNodeId)) {
           delete fleetState.nodes[boundNodeId];
-          broadcastToUI({ type: 'FLEET_STATE', payload: fleetState });
+          broadcastFleetState();
         }
       }, 5000);
+      broadcastFleetState();
     }
   });
 });
@@ -722,7 +767,7 @@ wssUI.on('connection', (ws) => {
   console.log(`[UI Client Connected] Total UI clients: ${uiConnections.size}`);
 
   // Send initial fleet state
-  ws.send(JSON.stringify({ type: 'FLEET_STATE', payload: fleetState }));
+  ws.send(JSON.stringify({ type: 'FLEET_STATE', payload: getFleetPayload() }));
 
   ws.on('message', (rawData) => {
     try {
@@ -734,6 +779,14 @@ wssUI.on('connection', (ws) => {
           const runReq = payload as RunBatchPayload;
           const targetWs = bridgeConnections.get(runReq.nodeId);
           if (targetWs && targetWs.readyState === WebSocket.OPEN) {
+            activeRunsMap.set(runReq.runId, {
+              runId: runReq.runId,
+              nodeId: runReq.nodeId,
+              devices: runReq.devices,
+              tools: runReq.tools,
+              startedAt: Date.now()
+            });
+
             targetWs.send(
               JSON.stringify({
                 type: 'TriggerRun',
@@ -748,9 +801,11 @@ wssUI.on('connection', (ws) => {
             );
 
             if (fleetState.nodes[runReq.nodeId]) {
-              fleetState.nodes[runReq.nodeId].activeRuns.push(runReq.runId);
-              broadcastToUI({ type: 'FLEET_STATE', payload: fleetState });
+              if (!fleetState.nodes[runReq.nodeId].activeRuns.includes(runReq.runId)) {
+                fleetState.nodes[runReq.nodeId].activeRuns.push(runReq.runId);
+              }
             }
+            broadcastFleetState();
           } else {
             ws.send(
               JSON.stringify({
@@ -768,6 +823,14 @@ wssUI.on('connection', (ws) => {
         }
 
         case 'CANCEL_RUN': {
+          activeRunsMap.delete(payload.runId);
+          if (payload.nodeId && fleetState.nodes[payload.nodeId]) {
+            fleetState.nodes[payload.nodeId].activeRuns = fleetState.nodes[payload.nodeId].activeRuns.filter(
+              (id) => id !== payload.runId
+            );
+          }
+          broadcastFleetState();
+
           const targetWs = bridgeConnections.get(payload.nodeId);
           if (targetWs && targetWs.readyState === WebSocket.OPEN) {
             targetWs.send(

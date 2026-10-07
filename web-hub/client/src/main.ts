@@ -10,6 +10,7 @@ interface DeviceInfo {
   carrier: string;
   region: string;
   modem: string;
+  busy?: boolean;
 }
 
 interface NodeState {
@@ -24,6 +25,8 @@ interface NodeState {
 
 interface FleetState {
   nodes: Record<string, NodeState>;
+  activeRuns?: Record<string, { runId: string; nodeId: string; devices: string[]; tools: string[]; startedAt: number }>;
+  busyDevices?: string[];
 }
 
 interface HistoryItem {
@@ -43,6 +46,16 @@ interface HistoryItem {
 // State
 let fleet: FleetState = { nodes: {} };
 const selectedStandbySerials = new Set<string>(); // serials checked in Standby table
+
+function isDeviceTesting(serial: string): boolean {
+  if (activeRunDevices.includes(serial)) return true;
+  if (fleet.busyDevices && fleet.busyDevices.includes(serial)) return true;
+  for (const node of Object.values(fleet.nodes)) {
+    const dev = (node.devices || []).find((d) => d.serial === serial);
+    if (dev && dev.busy) return true;
+  }
+  return false;
+}
 const workflowDevices = new Map<string, { serial: string; nodeId: string; model: string; pda: string; buildType: string }>(); // serial -> meta
 
 let selectedModelFilter = 'ALL';
@@ -361,14 +374,17 @@ function renderStandbyDevices() {
 
   let tableHtml = '';
   for (const { device, nodeId } of filteredDevs) {
+    const isBusy = isDeviceTesting(device.serial);
+    if (isBusy && selectedStandbySerials.has(device.serial)) {
+      selectedStandbySerials.delete(device.serial);
+    }
     const isChecked = selectedStandbySerials.has(device.serial);
-    const isBusy = activeRunDevices.includes(device.serial);
     const isUserDebug = (device.build_type || '').toLowerCase().includes('userdebug');
 
     tableHtml += `
-      <tr data-serial="${device.serial}" data-node="${nodeId}">
+      <tr data-serial="${device.serial}" data-node="${nodeId}" class="${isBusy ? 'row-busy' : ''}">
         <td style="text-align: center;">
-          <input type="checkbox" class="standby-dev-check" data-serial="${device.serial}" data-node="${nodeId}" data-model="${device.model || 'Unknown'}" data-pda="${device.build || '-'}" data-type="${device.build_type || 'user'}" ${isChecked ? 'checked' : ''} />
+          <input type="checkbox" class="standby-dev-check" data-serial="${device.serial}" data-node="${nodeId}" data-model="${device.model || 'Unknown'}" data-pda="${device.build || '-'}" data-type="${device.build_type || 'user'}" ${isChecked ? 'checked' : ''} ${isBusy ? 'disabled' : ''} title="${isBusy ? 'Perangkat sedang menjalankan pengujian' : 'Pilih perangkat'}" />
         </td>
         <td>
           <span class="pill-pc-id">${nodeId}</span>
@@ -384,7 +400,7 @@ function renderStandbyDevices() {
           <span class="serial-mono">${device.serial}</span>
         </td>
         <td>
-          <span class="status-pill ${isBusy ? 'busy' : 'ready'}">${isBusy ? 'BUSY' : 'READY'}</span>
+          <span class="status-pill ${isBusy ? 'running' : 'ready'}">${isBusy ? 'RUNNING' : 'READY'}</span>
         </td>
       </tr>
     `;
@@ -393,7 +409,7 @@ function renderStandbyDevices() {
   els.standbyTableBody.innerHTML = tableHtml;
 
   // Standby Checkbox Listeners
-  els.standbyTableBody.querySelectorAll('.standby-dev-check').forEach((cb) => {
+  els.standbyTableBody.querySelectorAll('.standby-dev-check:not(:disabled)').forEach((cb) => {
     cb.addEventListener('change', (e) => {
       const target = e.target as HTMLInputElement;
       const serial = target.dataset.serial!;
@@ -413,12 +429,14 @@ function updateStandbySelectionUI() {
   const count = selectedStandbySerials.size;
   els.addToWorkflowBtn.disabled = count === 0;
 
-  const allChecks = els.standbyTableBody.querySelectorAll('.standby-dev-check') as NodeListOf<HTMLInputElement>;
-  if (allChecks.length > 0) {
-    const allChecked = Array.from(allChecks).every(c => c.checked);
+  const enabledChecks = Array.from(els.standbyTableBody.querySelectorAll('.standby-dev-check:not(:disabled)')) as HTMLInputElement[];
+  if (enabledChecks.length > 0) {
+    const allChecked = enabledChecks.every((c) => c.checked);
     els.selectAllStandbyCheck.checked = allChecked;
+    els.selectAllStandbyCheck.disabled = false;
   } else {
     els.selectAllStandbyCheck.checked = false;
+    els.selectAllStandbyCheck.disabled = true;
   }
 }
 
@@ -426,7 +444,6 @@ function updateStandbySelectionUI() {
 function renderWorkflow() {
   const count = workflowDevices.size;
 
-  // Initial state / Empty state: Hide the entire ATM Workflow card
   // Initial state / Empty state: Hide the entire ATM Workflow card
   if (count === 0) {
     els.workflowCard.style.display = 'none';
@@ -457,14 +474,18 @@ function renderWorkflow() {
   // Render Workflow Devices Table
   els.workflowDevicesHeaderTitle.textContent = `DEVICES (${count} Unit)`;
   let devRowsHtml = '';
+  let hasExternalBusyDevice = false;
   for (const [serial, dev] of workflowDevices.entries()) {
-    const isBusy = activeRunDevices.includes(serial);
+    const isBusy = isDeviceTesting(serial);
+    if (isBusy && !activeRunDevices.includes(serial)) {
+      hasExternalBusyDevice = true;
+    }
     const statusPill = isBusy
       ? `<span class="status-pill running">RUNNING</span>`
       : `<span class="status-pill ready">READY</span>`;
 
     devRowsHtml += `
-      <tr data-wf-serial="${serial}">
+      <tr data-wf-serial="${serial}" class="${isBusy ? 'row-busy' : ''}">
         <td class="pc-node-cell">
           <span class="pc-badge-mono">${dev.nodeId || 'Node'}</span>
         </td>
@@ -494,7 +515,12 @@ function renderWorkflow() {
     });
   });
 
-  els.startAutomationBtn.disabled = activeRunId !== null || getSelectedTools().length === 0;
+  els.startAutomationBtn.disabled = activeRunId !== null || getSelectedTools().length === 0 || hasExternalBusyDevice;
+  if (hasExternalBusyDevice && activeRunId === null) {
+    els.startAutomationBtn.title = 'Perangkat sedang menjalankan pengujian di sesi lain';
+  } else {
+    els.startAutomationBtn.title = '';
+  }
 }
 
 function getSelectedTools(): string[] {
@@ -1040,7 +1066,7 @@ function setupEventListeners() {
   // Standby Select All Checkbox
   els.selectAllStandbyCheck.addEventListener('change', () => {
     const checked = els.selectAllStandbyCheck.checked;
-    els.standbyTableBody.querySelectorAll('.standby-dev-check').forEach((cb) => {
+    els.standbyTableBody.querySelectorAll('.standby-dev-check:not(:disabled)').forEach((cb) => {
       (cb as HTMLInputElement).checked = checked;
       const s = (cb as HTMLInputElement).dataset.serial!;
       if (checked) {
