@@ -579,11 +579,11 @@ function renderWorkflows() {
               ${
                 isRunning
                   ? `
-                    <button class="btn btn-danger btn-sm btn-cancel-device" data-serial="${wf.serial}">
-                      <span>Batal</span>
-                    </button>
                     <button class="btn btn-blue btn-sm running" disabled>
                       <span>Menjalankan Automasi...</span>
+                    </button>
+                    <button class="btn-icon-danger btn-cancel-device" data-serial="${wf.serial}" title="Batal Automasi">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
                     </button>
                   `
                   : `
@@ -664,11 +664,11 @@ function renderWorkflows() {
         if (isRunning !== wasRunning) {
           headerRight.innerHTML = isRunning
             ? `
-              <button class="btn btn-danger btn-sm btn-cancel-device" data-serial="${wf.serial}">
-                <span>Batal</span>
-              </button>
               <button class="btn btn-blue btn-sm running" disabled>
                 <span>Menjalankan Automasi...</span>
+              </button>
+              <button class="btn-icon-danger btn-cancel-device" data-serial="${wf.serial}" title="Batal Automasi">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
               </button>
             `
             : `
