@@ -119,12 +119,17 @@ pub fn list_devices() -> Result<Vec<DeviceInfo>, String> {
                         HashMap::new()
                     };
 
-                    let model = first_non_empty(&[
-                        token_value(&trimmed, "model"),
+                    let raw_model = first_non_empty(&[
                         props.get("ro.product.model").cloned().unwrap_or_default(),
                         props.get("ro.product.vendor.model").cloned().unwrap_or_default(),
+                        token_value(&trimmed, "model"),
                         token_value(&trimmed, "device"),
                     ]);
+                    let model = if raw_model.starts_with("SM_") {
+                        raw_model.replacen("SM_", "SM-", 1)
+                    } else {
+                        raw_model
+                    };
 
                     let mut build = first_non_empty(&[
                         props.get("ro.build.PDA").cloned().unwrap_or_default(),
