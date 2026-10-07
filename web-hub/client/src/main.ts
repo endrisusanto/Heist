@@ -302,9 +302,10 @@ function renderStandbyDevices() {
     modelCounts.set(m, (modelCounts.get(m) || 0) + 1);
   }
 
-  // Render Filter Chips
+  // Render Filter Chips with Icons
   let chipsHtml = `
     <button class="filter-chip ${selectedModelFilter === 'ALL' ? 'active' : ''}" data-model="ALL">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
       <span>SEMUA</span>
       <span class="chip-count">${allDevs.length}</span>
     </button>
@@ -316,6 +317,7 @@ function renderStandbyDevices() {
       const isActive = selectedModelFilter === model;
       chipsHtml += `
         <button class="filter-chip ${isActive ? 'active' : ''}" data-model="${model}">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>
           <span>${model}</span>
           <span class="chip-count">${count}</span>
         </button>
