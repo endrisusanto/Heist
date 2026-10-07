@@ -614,15 +614,15 @@ function renderToolDetail(toolId: string, wf: DeviceWorkflow, isRunning: boolean
 
     if (isFailed && apps.length > 0) {
       return `
-        <div class="sdt-detail-container" style="display: flex; flex-direction: column; gap: 4px;">
-          <div style="display: flex; align-items: center; justify-content: space-between; gap: 6px;">
-            <span style="font-size: 11px; font-weight: 600; color: #f87171;">Debuggable Apps (${apps.length})</span>
+        <div class="sdt-detail-container">
+          <div class="sdt-failed-row">
+            <span class="sdt-failed-title">Debuggable Apps (${apps.length})</span>
             <span class="badge-failed">Failed</span>
           </div>
-          <div class="sdt-apps-list" style="display: flex; flex-direction: column; gap: 3px; max-height: 85px; overflow-y: auto;">
+          <div class="sdt-apps-list">
             ${apps.map((app) => `
-              <div class="bvt-failed-item" style="padding: 2px 6px; background: rgba(239, 68, 68, 0.08); border-radius: 4px; border-left: 2px solid #ef4444;">
-                <span class="bvt-failed-name" style="font-family: monospace; font-size: 10.5px; color: #fca5a5;" title="${escapeHtml(app)}">${escapeHtml(app)}</span>
+              <div class="sdt-app-pill">
+                <span class="sdt-app-name" title="${escapeHtml(app)}">${escapeHtml(app)}</span>
               </div>
             `).join('')}
           </div>
@@ -632,8 +632,8 @@ function renderToolDetail(toolId: string, wf: DeviceWorkflow, isRunning: boolean
 
     if (isPassed) {
       return `
-        <div class="sdt-detail-container" style="display: flex; align-items: center; justify-content: space-between; gap: 6px;">
-          <span style="font-size: 11px; color: #a7f3d0;">No debuggable apps</span>
+        <div class="sdt-passed-row">
+          <span class="sdt-passed-text">No debuggable apps</span>
           <span class="badge-passed">Passed</span>
         </div>
       `;
@@ -641,8 +641,8 @@ function renderToolDetail(toolId: string, wf: DeviceWorkflow, isRunning: boolean
 
     if (status === 'FAILED' || status === 'ERROR') {
       return `
-        <div class="sdt-detail-container" style="display: flex; align-items: center; justify-content: space-between; gap: 6px;">
-          <span style="font-size: 11px; color: #f87171;" title="${escapeHtml(rowState?.subtext || 'SDT Failed')}">${escapeHtml(rowState?.subtext || 'Security Check Failed')}</span>
+        <div class="sdt-failed-row">
+          <span class="sdt-failed-title" title="${escapeHtml(rowState?.subtext || 'SDT Failed')}">${escapeHtml(rowState?.subtext || 'Security Check Failed')}</span>
           <span class="badge-failed">Failed</span>
         </div>
       `;
