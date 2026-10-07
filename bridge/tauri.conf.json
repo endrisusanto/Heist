@@ -10,11 +10,13 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "Heist Bridge - Node Settings",
+        "title": "Heist Bridge - Node Settings & Console",
         "label": "main",
-        "width": 520,
-        "height": 580,
-        "resizable": false,
+        "width": 580,
+        "height": 640,
+        "minWidth": 500,
+        "minHeight": 520,
+        "resizable": true,
         "center": true,
         "visible": false
       }

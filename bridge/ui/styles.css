@@ -10,6 +10,7 @@
   --heist-red-glow: rgba(210, 35, 42, 0.35);
   --green: #3fb950;
   --yellow: #d29922;
+  --blue: #58a6ff;
   --radius: 8px;
 }
 
@@ -32,57 +33,59 @@ body {
   display: flex;
   flex-direction: column;
   height: 100vh;
-  padding: 20px;
-  gap: 16px;
+  padding: 16px;
+  gap: 12px;
 }
 
 .header {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 12px;
 }
 
 .logo-box {
-  width: 48px;
-  height: 48px;
+  width: 42px;
+  height: 42px;
   background: radial-gradient(circle, var(--heist-red-glow) 0%, transparent 70%);
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 12px;
+  border-radius: 10px;
+  flex-shrink: 0;
 }
 
 .logo-img {
-  width: 44px;
-  height: 44px;
+  width: 38px;
+  height: 38px;
   object-fit: contain;
 }
 
 .title-box h1 {
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 700;
   letter-spacing: -0.3px;
   color: var(--text);
+  line-height: 1.2;
 }
 
 .subtitle {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--text-muted);
 }
 
 .status-card {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   background: var(--surface);
   border: 1px solid var(--border);
-  padding: 12px 14px;
+  padding: 10px 12px;
   border-radius: var(--radius);
 }
 
 .status-indicator {
-  width: 12px;
-  height: 12px;
+  width: 10px;
+  height: 10px;
   border-radius: 50%;
   background: var(--yellow);
   box-shadow: 0 0 8px rgba(210, 153, 34, 0.5);
@@ -103,11 +106,11 @@ body {
 .status-text {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
 }
 
 .status-text strong {
-  font-size: 13px;
+  font-size: 12.5px;
   color: var(--text);
 }
 
@@ -119,18 +122,30 @@ body {
 .config-form {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
+}
+
+.form-row {
+  display: flex;
+  gap: 10px;
+}
+
+.flex-1 {
   flex: 1;
+}
+
+.flex-2 {
+  flex: 2;
 }
 
 .form-group {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
 }
 
 label {
-  font-size: 12px;
+  font-size: 11.5px;
   font-weight: 500;
   color: var(--text-muted);
 }
@@ -140,8 +155,8 @@ input {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   color: var(--text);
-  padding: 8px 12px;
-  font-size: 13px;
+  padding: 7px 10px;
+  font-size: 12.5px;
   outline: none;
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
@@ -161,13 +176,14 @@ input:focus {
 }
 
 .btn {
-  padding: 8px 14px;
+  padding: 7px 12px;
   border-radius: var(--radius);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
   cursor: pointer;
   border: 1px solid transparent;
   transition: all 0.2s ease;
+  white-space: nowrap;
 }
 
 .btn.primary {
@@ -203,11 +219,129 @@ input:focus {
 .form-actions {
   display: flex;
   gap: 10px;
-  margin-top: 6px;
 }
 
 .form-actions .btn {
   flex: 1;
+}
+
+/* Terminal Logs Card */
+.terminal-card {
+  display: flex;
+  flex-direction: column;
+  background: #090c10;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  flex: 1;
+  min-height: 160px;
+  overflow: hidden;
+}
+
+.terminal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.terminal-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+}
+
+.terminal-title svg {
+  color: var(--heist-red);
+}
+
+.btn-clear {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  font-size: 11px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-clear:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+  border-color: var(--text-muted);
+}
+
+.terminal-console {
+  flex: 1;
+  padding: 8px 10px;
+  overflow-y: auto;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  user-select: text;
+}
+
+.terminal-console::-webkit-scrollbar {
+  width: 6px;
+}
+
+.terminal-console::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+
+.log-entry {
+  display: flex;
+  gap: 6px;
+  word-break: break-all;
+}
+
+.log-time {
+  color: #6e7681;
+  flex-shrink: 0;
+  font-size: 10.5px;
+}
+
+.log-msg {
+  white-space: pre-wrap;
+  color: var(--text);
+}
+
+.log-entry.sys .log-msg {
+  color: var(--text-muted);
+}
+
+.log-entry.info .log-msg {
+  color: var(--blue);
+}
+
+.log-entry.success .log-msg {
+  color: var(--green);
+}
+
+.log-entry.warn .log-msg {
+  color: var(--yellow);
+}
+
+.log-entry.error .log-msg {
+  color: #f85149;
+}
+
+.log-entry.log .log-msg {
+  color: #c9d1d9;
 }
 
 .footer {
@@ -218,7 +352,7 @@ input:focus {
   font-size: 11px;
   color: var(--text-muted);
   border-top: 1px solid var(--border);
-  padding-top: 12px;
+  padding-top: 8px;
 }
 
 .dot-sep {

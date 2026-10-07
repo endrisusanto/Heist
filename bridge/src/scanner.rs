@@ -113,7 +113,7 @@ pub fn list_devices() -> Result<Vec<DeviceInfo>, String> {
             .map(|(serial, state, trimmed)| {
                 let adb_clone = adb.clone();
                 thread::spawn(move || {
-                    let mut props = if state == "device" {
+                    let props = if state == "device" {
                         adb_props(&adb_clone, &serial).unwrap_or_default()
                     } else {
                         HashMap::new()

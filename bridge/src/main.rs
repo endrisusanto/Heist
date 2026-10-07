@@ -28,6 +28,13 @@ struct AppState {
     connected: AtomicBool,
 }
 
+pub fn emit_log(app: &AppHandle, level: &str, message: &str) {
+    let _ = app.emit("bridge-log", serde_json::json!({
+        "level": level,
+        "message": message
+    }));
+}
+
 #[tauri::command]
 fn get_config(state: State<'_, AppState>) -> Result<BridgeConfig, String> {
     let guard = state.config.lock().map_err(|e| e.to_string())?;
@@ -45,6 +52,7 @@ fn save_config(
         *guard = config.clone();
     }
     save_config_to_disk(&config);
+    emit_log(&app, "info", &format!("Config saved. Node ID: {}, Hub: {}", config.node_id, config.hub_url));
     let _ = app.emit("bridge-status", serde_json::json!({
         "status": "connecting",
         "detail": format!("Reconnecting to {}", config.hub_url)
@@ -221,13 +229,16 @@ async fn ws_connection_loop(app: AppHandle) {
             "status": "connecting",
             "detail": format!("Connecting to {hub_url}...")
         }));
+        emit_log(&app, "info", &format!("Connecting to WebSocket hub at {}...", hub_url));
 
         let mut req = match hub_url.clone().into_client_request() {
             Ok(r) => r,
             Err(e) => {
+                let err_msg = format!("Invalid URL: {e}");
+                emit_log(&app, "error", &err_msg);
                 let _ = app.emit("bridge-status", serde_json::json!({
                     "status": "disconnected",
-                    "detail": format!("Invalid URL: {e}")
+                    "detail": err_msg
                 }));
                 tokio::time::sleep(Duration::from_secs(5)).await;
                 continue;
@@ -253,6 +264,7 @@ async fn ws_connection_loop(app: AppHandle) {
                     "status": "connected",
                     "detail": format!("Connected to {hub_url}")
                 }));
+                emit_log(&app, "success", &format!("Connected to Hub as node '{}'", node_id));
 
                 let (mut write, mut read) = ws_stream.split();
 
@@ -312,6 +324,7 @@ async fn ws_connection_loop(app: AppHandle) {
                 let tx_scanner = tx.clone();
                 let app_scanner = app.clone();
                 let scan_task = tokio::spawn(async move {
+                    let mut last_count = usize::MAX;
                     loop {
                         tokio::time::sleep(Duration::from_secs(3)).await;
                         let devices = tokio::task::spawn_blocking(scanner::list_devices)
@@ -321,6 +334,10 @@ async fn ws_connection_loop(app: AppHandle) {
 
                         let count = devices.len();
                         let _ = app_scanner.emit("device-count-update", count);
+                        if count != last_count {
+                            last_count = count;
+                            emit_log(&app_scanner, "info", &format!("ADB discovery: {count} active device(s) online"));
+                        }
 
                         if tx_scanner
                             .send(BridgeToHubMessage::DeviceListUpdate { devices })
@@ -366,15 +383,18 @@ async fn ws_connection_loop(app: AppHandle) {
                     *guard = None;
                 }
 
+                emit_log(&app, "warn", "Connection to Hub closed. Reconnecting...");
                 let _ = app.emit("bridge-status", serde_json::json!({
                     "status": "disconnected",
                     "detail": "Connection closed"
                 }));
             }
             Err(e) => {
+                let err_msg = format!("Connect failed: {e}. Retry in {backoff_secs}s");
+                emit_log(&app, "error", &err_msg);
                 let _ = app.emit("bridge-status", serde_json::json!({
                     "status": "disconnected",
-                    "detail": format!("Connect failed: {e}. Retry in {backoff_secs}s")
+                    "detail": err_msg
                 }));
             }
         }
@@ -394,23 +414,29 @@ fn handle_hub_command(
 
     match cmd {
         HubToBridgeMessage::TriggerRun(req) => {
+            emit_log(app, "info", &format!("Run triggered: {} on {} device(s) with {} tool(s)", req.run_id, req.devices.len(), req.tools.len()));
             let tx_log = tx.clone();
             let tx_finish = tx.clone();
             let runner_state = state.runner.clone();
+            let app_log = app.clone();
+            let app_finish = app.clone();
 
             let res = runner::run_batch_task(
                 runner_state,
                 req,
                 &atm_root,
                 move |run_id, line| {
-                    let _ = tx_log.send(BridgeToHubMessage::LogStream { run_id, line });
+                    let _ = tx_log.send(BridgeToHubMessage::LogStream { run_id: run_id.clone(), line: line.clone() });
+                    emit_log(&app_log, "log", &format!("[{run_id}] {line}"));
                 },
                 move |finished| {
+                    emit_log(&app_finish, "info", &format!("Automation run {} completed with exit code {}", finished.run_id, finished.exit_code));
                     let _ = tx_finish.send(BridgeToHubMessage::RunFinished(finished));
                 },
             );
 
             if let Err(e) = res {
+                emit_log(app, "error", &format!("Failed to trigger run: {e}"));
                 let _ = tx.send(BridgeToHubMessage::ActionResponse {
                     action: "trigger_run".to_string(),
                     success: false,
@@ -419,6 +445,7 @@ fn handle_hub_command(
             }
         }
         HubToBridgeMessage::CancelRun { run_id } => {
+            emit_log(app, "warn", &format!("Cancel run requested for {run_id}"));
             let res = state.runner.cancel_run(&run_id);
             let _ = tx.send(BridgeToHubMessage::ActionResponse {
                 action: "cancel_run".to_string(),
@@ -427,11 +454,13 @@ fn handle_hub_command(
             });
         }
         HubToBridgeMessage::RequestPreflight { atm_root: root_override } => {
+            emit_log(app, "info", "Preflight check requested");
             let root = root_override.unwrap_or(atm_root);
             let report = preflight::check_preflight(&root);
             let _ = tx.send(BridgeToHubMessage::PreflightReport { report });
         }
         HubToBridgeMessage::UpdateTools { atm_root: root_override } => {
+            emit_log(app, "info", "ATM tools update requested");
             let root = root_override.unwrap_or(atm_root);
             let res = runner::run_atm_agent_update(&root);
             let _ = tx.send(BridgeToHubMessage::ActionResponse {
@@ -441,12 +470,15 @@ fn handle_hub_command(
             });
         }
         HubToBridgeMessage::SetLamp { serial, state } => {
+            emit_log(app, "info", &format!("Toggle lamp for {serial} (state: {state})"));
             let _ = scanner::set_device_lamp(&serial, state);
         }
         HubToBridgeMessage::PressHome { serial } => {
+            emit_log(app, "info", &format!("Press Home button on {serial}"));
             let _ = scanner::press_device_home(&serial);
         }
         HubToBridgeMessage::ClearResults { serial } => {
+            emit_log(app, "info", &format!("Clear result files on {serial}"));
             let res = scanner::clear_device_results(&serial, std::path::Path::new(&atm_root));
             let _ = tx.send(BridgeToHubMessage::ActionResponse {
                 action: "clear_results".to_string(),
@@ -455,9 +487,15 @@ fn handle_hub_command(
             });
         }
         HubToBridgeMessage::UpdateBridge { download_url } => {
+            emit_log(app, "info", "Bridge self-update initiated");
             let tx_clone = tx.clone();
+            let app_clone = app.clone();
             tokio::spawn(async move {
                 let res = updater::perform_update(download_url);
+                match &res {
+                    Ok(msg) => emit_log(&app_clone, "success", &format!("Bridge update succeeded: {msg}")),
+                    Err(e) => emit_log(&app_clone, "error", &format!("Bridge update failed: {e}")),
+                }
                 let _ = tx_clone.send(BridgeToHubMessage::ActionResponse {
                     action: "update_bridge".to_string(),
                     success: res.is_ok(),

@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 pub struct BridgeConfig {
     pub node_id: String,
     pub hub_url: String,
+    #[serde(default)]
     pub bridge_token: String,
     pub atm_root: String,
 }
