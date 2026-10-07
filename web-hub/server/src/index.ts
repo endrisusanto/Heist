@@ -105,8 +105,17 @@ function broadcastToUI(msg: object) {
 
 
 // ---- Unified server-side app state (shared by every UI session) ----
-type ToolStatus = 'STANDBY' | 'RUNNING' | 'PASSED';
-interface ToolRow { status: ToolStatus; subtext: string; serial?: string; nodeId?: string }
+type ToolStatus = 'STANDBY' | 'RUNNING' | 'PASSED' | 'WARNING' | 'FAILED' | 'ERROR';
+interface ToolRow {
+  status: ToolStatus;
+  subtext: string;
+  duration?: string;
+  durationSecs?: number;
+  bvtSummary?: { total: number; passed: number; failed: number };
+  failedSubtests?: Array<{ name: string; status: string; detail: string }>;
+  serial?: string;
+  nodeId?: string;
+}
 interface DeviceWorkflow {
   serial: string;
   nodeId: string;
@@ -115,6 +124,10 @@ interface DeviceWorkflow {
   buildType: string;
   tools: string[];
   toolStatus: Record<string, ToolRow>;
+  ctsvSubtests?: {
+    DeviceOwnerTestsNormal: boolean;
+    BYODManagedProvisioningNormal: boolean;
+  };
   run: {
     runId: string;
     startedAt: number;
@@ -186,21 +199,119 @@ function findWorkflowByRunId(runId: string): DeviceWorkflow | undefined {
   return Object.values(app.workflows).find((w) => w.run?.runId === runId);
 }
 
+function normalizeToolId(toolName: string): string | null {
+  const t = toolName.toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (t.includes('getprop')) return 'getprop';
+  if (t.includes('bvt') || t.includes('basicinfo')) return 'bvt';
+  if (t.includes('svt') || t.includes('preload')) return 'svt';
+  if (t.includes('sdt') || t.includes('devicetest')) return 'sdt';
+  if (t.includes('cts') || t.includes('verifier')) return 'ctsv';
+  return null;
+}
+
+function formatDurationSecs(secs: number): string {
+  if (isNaN(secs) || secs < 0) return '00:00:00';
+  const h = Math.floor(secs / 3600).toString().padStart(2, '0');
+  const m = Math.floor((secs % 3600) / 60).toString().padStart(2, '0');
+  const s = Math.floor(secs % 60).toString().padStart(2, '0');
+  return `${h}:${m}:${s}`;
+}
+
 function setDeviceToolStatus(wf: DeviceWorkflow, tool: string, status: ToolStatus, subtext: string) {
   if (!wf.tools.includes(tool)) return;
-  wf.toolStatus[tool] = { status, subtext, serial: wf.serial, nodeId: wf.nodeId };
+  wf.toolStatus[tool] = {
+    ...wf.toolStatus[tool],
+    status,
+    subtext,
+    serial: wf.serial,
+    nodeId: wf.nodeId
+  };
   broadcastApp(false);
 }
 
 function parseProgress(wf: DeviceWorkflow, line: string) {
-  if (line.includes('[Getprop] END Getprop') || line.includes('Getprop execution completed')) {
-    setDeviceToolStatus(wf, 'getprop', 'PASSED', 'Pengumpulan build properties sukses.');
+  // 1. Tool START event
+  const startMatch = line.match(/\[([^\]]+)\]\s+START\s+([^:]+):/i);
+  if (startMatch) {
+    const toolId = normalizeToolId(startMatch[2]);
+    if (toolId && wf.tools.includes(toolId)) {
+      wf.toolStatus[toolId] = {
+        ...wf.toolStatus[toolId],
+        status: 'RUNNING',
+        subtext: 'Sedang menjalankan pengujian...',
+        duration: wf.toolStatus[toolId]?.duration || '-',
+        serial: wf.serial,
+        nodeId: wf.nodeId
+      };
+      broadcastApp(false);
+      return;
+    }
   }
-  if (line.includes('BVT') && line.includes('PASS')) setDeviceToolStatus(wf, 'bvt', 'PASSED', 'BVT Tests completed successfully.');
-  if (line.includes('SVT') && line.includes('PASS')) setDeviceToolStatus(wf, 'svt', 'PASSED', 'SVT Preload validation passed.');
-  if (line.includes('SDT') && line.includes('PASS')) setDeviceToolStatus(wf, 'sdt', 'PASSED', 'SDT Device test passed.');
-  if ((line.includes('CTS') || line.includes('CTSV')) && (line.includes('PASS') || line.includes('PASSED') || line.includes('OK') || line.includes('test=pass'))) {
-    setDeviceToolStatus(wf, 'ctsv', 'PASSED', 'CTS-Verifier automated suites passed.');
+
+  // 2. BVT Summary event
+  const bvtSummaryMatch = line.match(/\[([^\]]+)\]\s+BVT_SUMMARY\t(\d+)\t(\d+)\t(\d+)/);
+  if (bvtSummaryMatch) {
+    const total = parseInt(bvtSummaryMatch[2], 10);
+    const passed = parseInt(bvtSummaryMatch[3], 10);
+    const failed = parseInt(bvtSummaryMatch[4], 10);
+    if (!wf.toolStatus['bvt']) wf.toolStatus['bvt'] = { status: 'RUNNING', subtext: '', serial: wf.serial, nodeId: wf.nodeId };
+    wf.toolStatus['bvt'].bvtSummary = { total, passed, failed };
+    broadcastApp(false);
+    return;
+  }
+
+  // 3. BVT Subtest failure event
+  const bvtSubtestMatch = line.match(/\[([^\]]+)\]\s+BVT_SUBTEST\t([^\t]+)\t([^\t]+)\t?(.*)/);
+  if (bvtSubtestMatch) {
+    const status = bvtSubtestMatch[2].trim();
+    const name = bvtSubtestMatch[3].trim();
+    const detail = bvtSubtestMatch[4] ? bvtSubtestMatch[4].trim() : '';
+    if (!wf.toolStatus['bvt']) wf.toolStatus['bvt'] = { status: 'RUNNING', subtext: '', serial: wf.serial, nodeId: wf.nodeId };
+    if (!wf.toolStatus['bvt'].failedSubtests) wf.toolStatus['bvt'].failedSubtests = [];
+    if (!wf.toolStatus['bvt'].failedSubtests.some((f) => f.name === name)) {
+      wf.toolStatus['bvt'].failedSubtests.push({ name, status, detail });
+    }
+    broadcastApp(false);
+    return;
+  }
+
+  // 4. Tool END event
+  const endMatch = line.match(/\[([^\]]+)\]\s+END\s+([^\s]+)\s+exit=(-?\d+)\s+duration=(\d+)s\s+result=([A-Z_]+)(?:\s+(.*))?/i);
+  if (endMatch) {
+    const toolId = normalizeToolId(endMatch[2]);
+    if (toolId && wf.tools.includes(toolId)) {
+      const exitCode = parseInt(endMatch[3], 10);
+      const durSecs = parseInt(endMatch[4], 10);
+      const rawResult = endMatch[5].toUpperCase();
+      const detail = endMatch[6] ? endMatch[6].trim() : '';
+
+      let status: ToolStatus = 'PASSED';
+      if (rawResult === 'PASS') status = 'PASSED';
+      else if (rawResult === 'WARNING') status = 'WARNING';
+      else if (rawResult === 'ERROR' || rawResult === 'FAILED' || exitCode !== 0) status = 'ERROR';
+      else if (rawResult === 'CANCELLED') status = 'STANDBY';
+
+      const durationStr = formatDurationSecs(durSecs);
+      let subtext = detail;
+      if (!subtext) {
+        if (status === 'PASSED') subtext = 'Pengujian sukses.';
+        else if (status === 'WARNING') subtext = 'Pengujian selesai dengan peringatan.';
+        else if (status === 'ERROR') subtext = 'Error (Periksa Log)';
+        else subtext = 'Standby.';
+      }
+
+      wf.toolStatus[toolId] = {
+        ...wf.toolStatus[toolId],
+        status,
+        subtext,
+        duration: durationStr,
+        durationSecs: durSecs,
+        serial: wf.serial,
+        nodeId: wf.nodeId
+      };
+      broadcastApp(false);
+      return;
+    }
   }
 }
 
@@ -225,14 +336,26 @@ function finishDeviceRun(serial: string, status: 'FINISHED' | 'CANCELLED') {
   }
 
   const total = wf.tools.length;
+  let passedCount = 0;
+  let failedCount = 0;
+  for (const t of wf.tools) {
+    const st = wf.toolStatus[t]?.status;
+    if (st === 'PASSED' || st === 'WARNING') passedCount++;
+    else if (st === 'ERROR' || st === 'FAILED') failedCount++;
+    if (status === 'CANCELLED' && st === 'RUNNING') {
+      wf.toolStatus[t].status = 'STANDBY';
+      wf.toolStatus[t].subtext = 'Dibatalkan.';
+    }
+  }
+
   app.history.unshift({
     id: runInfo.runId,
     nodeId: wf.nodeId,
     mode: wf.tools.map((t) => t.toUpperCase()).join(', '),
     devices: [serial],
     runtimeSecs: Math.floor((Date.now() - runInfo.startedAt) / 1000),
-    passed: status === 'FINISHED' ? total : 0,
-    failed: 0,
+    passed: passedCount,
+    failed: failedCount,
     total,
     status,
     archiveName: `ATM_${pda}.zip`,
@@ -240,11 +363,6 @@ function finishDeviceRun(serial: string, status: 'FINISHED' | 'CANCELLED') {
   });
   app.history = app.history.slice(0, 200);
 
-  for (const t of wf.tools) {
-    wf.toolStatus[t] = status === 'FINISHED'
-      ? { status: 'PASSED', subtext: 'Completed successfully.', serial, nodeId: wf.nodeId }
-      : { status: 'STANDBY', subtext: 'Cancelled.', serial, nodeId: wf.nodeId };
-  }
   pushLog(`[Hub] Run ${runInfo.runId} on ${serial} ${status}`, status === 'FINISHED' ? 'success' : 'warn');
   broadcastApp();
   broadcastFleetState();
@@ -271,7 +389,16 @@ function startDeviceRun(serial: string, ui: WebSocket) {
     failed: false
   };
   for (const t of wf.tools) {
-    wf.toolStatus[t] = { status: 'RUNNING', subtext: 'Running automated test...', serial: wf.serial, nodeId: wf.nodeId };
+    wf.toolStatus[t] = {
+      status: 'STANDBY',
+      subtext: 'Menunggu giliran pengujian...',
+      duration: '-',
+      durationSecs: 0,
+      bvtSummary: undefined,
+      failedSubtests: [],
+      serial: wf.serial,
+      nodeId: wf.nodeId
+    };
   }
   pushLog(`[Hub] Starting Automation Suite ${runId} on ${wf.model} (${wf.serial})...`, 'sys');
 
@@ -283,12 +410,18 @@ function startDeviceRun(serial: string, ui: WebSocket) {
     startedAt: wf.run.startedAt
   });
 
+  const selectedCtsvSubtests: string[] = [];
+  const ctsvSub = wf.ctsvSubtests || { DeviceOwnerTestsNormal: true, BYODManagedProvisioningNormal: true };
+  if (ctsvSub.DeviceOwnerTestsNormal) selectedCtsvSubtests.push('DeviceOwnerTestsNormal');
+  if (ctsvSub.BYODManagedProvisioningNormal) selectedCtsvSubtests.push('BYODManagedProvisioningNormal');
+
   targetWs.send(JSON.stringify({
     type: 'TriggerRun',
     payload: {
       run_id: runId,
       devices: [wf.serial],
       tools: wf.tools,
+      ctsv_subtests: selectedCtsvSubtests,
       concurrency: 1,
       update: false
     }
@@ -366,8 +499,9 @@ function handleAppIntent(type: string, payload: any, ui: WebSocket): boolean {
           model: str(d.model),
           pda: str(d.pda),
           buildType: str(d.buildType),
-          tools: ['getprop', 'bvt', 'svt', 'sdt', 'ctsv'],
+          tools: ['ctsv', 'getprop', 'bvt', 'svt', 'sdt'],
           toolStatus: {},
+          ctsvSubtests: { DeviceOwnerTestsNormal: true, BYODManagedProvisioningNormal: true },
           run: null
         };
       }
@@ -395,6 +529,18 @@ function handleAppIntent(type: string, payload: any, ui: WebSocket): boolean {
       const wf = app.workflows[s];
       if (wf && !wf.run) {
         wf.tools = (payload.tools || []).filter((t: string) => ['getprop', 'bvt', 'svt', 'sdt', 'ctsv'].includes(t));
+        broadcastApp();
+      }
+      return true;
+    }
+    case 'SET_CTSV_SUBTESTS': {
+      const s = str(payload.serial);
+      const wf = app.workflows[s];
+      if (wf && !wf.run) {
+        wf.ctsvSubtests = {
+          DeviceOwnerTestsNormal: Boolean(payload.subtests?.DeviceOwnerTestsNormal),
+          BYODManagedProvisioningNormal: Boolean(payload.subtests?.BYODManagedProvisioningNormal)
+        };
         broadcastApp();
       }
       return true;

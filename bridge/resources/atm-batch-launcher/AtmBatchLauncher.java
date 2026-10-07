@@ -47,6 +47,7 @@ public class AtmBatchLauncher {
     private final Map<String, Set<String>> initialThirdPartyPackages = new ConcurrentHashMap<>();
     private static volatile boolean cliCancelRequested;
     private static volatile String cliAdbPath = adbExeName();
+    private static volatile String cliCtsvSubtests = "";
     private static final List<Process> cliRunningProcesses = Collections.synchronizedList(new ArrayList<>());
     private static final Map<String, Set<String>> cliInitialThirdPartyPackages = new ConcurrentHashMap<>();
 
@@ -746,6 +747,7 @@ public class AtmBatchLauncher {
     private static int cliRun(Map<String, String> args) {
         String adbPath = args.getOrDefault("adb", defaultAdbPath());
         cliAdbPath = adbPath;
+        cliCtsvSubtests = args.getOrDefault("ctsv-subtests", "");
         cliCancelRequested = false;
         cliInitialThirdPartyPackages.clear();
         List<ToolProfile> tools = parseTools(args.getOrDefault("tools", "getprop"));
@@ -1102,7 +1104,7 @@ public class AtmBatchLauncher {
             staticRunCommand(Arrays.asList(cliAdbPath, "-s", device.serial, "shell", "pm", "grant", "com.example.autoctsver", "android.permission.POST_NOTIFICATIONS"), ROOT, null, Duration.ofSeconds(5));
             staticRunCommand(Arrays.asList(cliAdbPath, "-s", device.serial, "shell", "appops", "set", "com.android.cts.verifier", "MANAGE_EXTERNAL_STORAGE", "allow"), ROOT, null, Duration.ofSeconds(5));
 
-            // 6. Resolve Runner & Run Instrumentation with live streaming
+            // 6. Resolve Runner & Filter Test Cases
             if (!cliCancelRequested) {
                 String runner = "com.example.autoctsver.test/androidx.test.runner.AndroidJUnitRunner";
                 CommandResult pmInst = staticRunCommand(Arrays.asList(cliAdbPath, "-s", device.serial, "shell", "pm", "list", "instrumentation"), ROOT, null, Duration.ofSeconds(10));
@@ -1116,13 +1118,65 @@ public class AtmBatchLauncher {
                         }
                     }
                 }
-                log.accept("[CTSV] Running am instrument: " + runner);
-                List<String> instCmd = Arrays.asList(
-                    cliAdbPath, "-s", device.serial, "shell", "am", "instrument", "-w", "-r", runner
-                );
-                ProcessOutcome instOutcome = cliRunLoggedProcess(instCmd, ROOT, env, logFile, Duration.ofMinutes(15));
-                exitCode = instOutcome.exitCode;
-                timedOut = instOutcome.timedOut;
+
+                List<String> targetMethods = new ArrayList<>();
+                if (cliCtsvSubtests != null && !cliCtsvSubtests.isBlank()) {
+                    for (String sub : cliCtsvSubtests.split(",")) {
+                        String trimmed = sub.trim();
+                        if (!trimmed.isEmpty()) {
+                            targetMethods.add("com.example.autoctsver.ExampleInstrumentedTest#" + trimmed);
+                        }
+                    }
+                }
+                if (targetMethods.isEmpty()) {
+                    targetMethods.add("com.example.autoctsver.ExampleInstrumentedTest#DeviceOwnerTestsNormal");
+                    targetMethods.add("com.example.autoctsver.ExampleInstrumentedTest#BYODManagedProvisioningNormal");
+                }
+
+                List<String> instCmd = new ArrayList<>(Arrays.asList(
+                    cliAdbPath, "-s", device.serial, "shell", "am", "instrument", "-w", "-r",
+                    "-e", "class", String.join(",", targetMethods),
+                    runner
+                ));
+                log.accept("[CTSV] Running am instrument: " + String.join(" ", instCmd));
+
+                ProcessBuilder pb = new ProcessBuilder(instCmd);
+                pb.directory(ROOT.toFile());
+                pb.redirectErrorStream(true);
+                if (env != null) pb.environment().putAll(env);
+                Process process = pb.start();
+                cliRunningProcesses.add(process);
+
+                ExecutorService pump = Executors.newSingleThreadExecutor();
+                Future<?> readerFuture = pump.submit(() -> {
+                    try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+                        String line;
+                        while ((line = reader.readLine()) != null) {
+                            String trimmed = line.trim();
+                            if (!trimmed.isEmpty()) {
+                                log.accept("[CTSV] " + trimmed);
+                            }
+                        }
+                    } catch (IOException ignored) {}
+                });
+
+                long deadline = System.nanoTime() + Duration.ofMinutes(15).toNanos();
+                while (!cliCancelRequested && System.nanoTime() < deadline) {
+                    if (process.waitFor(250, TimeUnit.MILLISECONDS)) break;
+                }
+                if (process.isAlive()) {
+                    if (cliCancelRequested) {
+                        process.destroy();
+                        if (!process.waitFor(2, TimeUnit.SECONDS)) process.destroyForcibly();
+                    } else {
+                        timedOut = true;
+                        process.destroyForcibly();
+                    }
+                }
+                exitCode = process.waitFor();
+                try { readerFuture.get(2, TimeUnit.SECONDS); } catch (Exception ignored) {}
+                pump.shutdownNow();
+                cliRunningProcesses.remove(process);
             }
 
             // 7. Pull Reports from Device to results/<model>/<pda>/CTSVerifier/

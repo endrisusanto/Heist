@@ -66,6 +66,8 @@ pub struct RunRequest {
     pub concurrency: Option<u8>,
     pub update: Option<bool>,
     pub atm_root: Option<String>,
+    #[serde(default)]
+    pub ctsv_subtests: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

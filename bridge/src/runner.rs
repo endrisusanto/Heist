@@ -124,6 +124,12 @@ where
         if request.update.unwrap_or(false) {
             args.push("--update".to_string());
         }
+        if let Some(ref subtests) = request.ctsv_subtests {
+            if !subtests.is_empty() {
+                args.push("--ctsv-subtests".to_string());
+                args.push(subtests.join(","));
+            }
+        }
 
         let java = java_bin();
         log_callback(
