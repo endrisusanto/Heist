@@ -98,7 +98,7 @@ pub fn list_devices() -> Result<Vec<DeviceInfo>, String> {
         let cache = DEVICE_CACHE.lock().unwrap();
         for (serial, state, trimmed) in raw_devices {
             if let Some(cached) = cache.get(&serial) {
-                if cached.state == state && cached.model != "UNKNOWN" && cached.model != "-" {
+                if cached.state == state && cached.model != "UNKNOWN" && cached.model != "-" && cached.build != "-" && !cached.build.is_empty() {
                     devices.push(cached.clone());
                     continue;
                 }
@@ -113,37 +113,74 @@ pub fn list_devices() -> Result<Vec<DeviceInfo>, String> {
             .map(|(serial, state, trimmed)| {
                 let adb_clone = adb.clone();
                 thread::spawn(move || {
-                    let props = if state == "device" {
+                    let mut props = if state == "device" {
                         adb_props(&adb_clone, &serial).unwrap_or_default()
                     } else {
                         HashMap::new()
                     };
+
+                    let model = first_non_empty(&[
+                        token_value(&trimmed, "model"),
+                        props.get("ro.product.model").cloned().unwrap_or_default(),
+                        props.get("ro.product.vendor.model").cloned().unwrap_or_default(),
+                    ]);
+
+                    let mut build = first_non_empty(&[
+                        props.get("ro.build.PDA").cloned().unwrap_or_default(),
+                        props.get("ro.boot.bootloader").cloned().unwrap_or_default(),
+                        props.get("ro.bootloader").cloned().unwrap_or_default(),
+                        props.get("ro.build.version.incremental").cloned().unwrap_or_default(),
+                        props.get("ro.bootimage.build.version.incremental").cloned().unwrap_or_default(),
+                        props.get("ro.system.build.version.incremental").cloned().unwrap_or_default(),
+                        props.get("ro.vendor.build.version.incremental").cloned().unwrap_or_default(),
+                        props.get("ro.odm.build.version.incremental").cloned().unwrap_or_default(),
+                        props.get("ro.product.build.version.incremental").cloned().unwrap_or_default(),
+                        props.get("ro.build.display.id").cloned().unwrap_or_default(),
+                        props.get("ro.build.id").cloned().unwrap_or_default(),
+                    ]);
+
+                    // Single getprop fallback if full getprop map missed PDA
+                    if (build == "-" || build.is_empty()) && state == "device" {
+                        let mut fallback_cmd = Command::new(&adb_clone);
+                        fallback_cmd.args(["-s", &serial, "shell", "getprop ro.build.PDA || getprop ro.boot.bootloader || getprop ro.build.version.incremental"]);
+                        if let Ok(val) = run_output_with_timeout(fallback_cmd, Duration::from_secs(3)) {
+                            let clean_val = val.trim().to_string();
+                            if !clean_val.is_empty() {
+                                build = clean_val;
+                            }
+                        }
+                    }
+
                     DeviceInfo {
                         serial: serial.clone(),
                         state,
-                        model: first_non_empty(&[
-                            token_value(&trimmed, "model"),
-                            props.get("ro.product.model").cloned().unwrap_or_default(),
-                            props.get("ro.product.vendor.model").cloned().unwrap_or_default(),
+                        model,
+                        build_type: first_non_empty(&[
+                            props.get("ro.build.type").cloned().unwrap_or_default(),
+                            props.get("ro.system.build.type").cloned().unwrap_or_default(),
+                            props.get("ro.vendor.build.type").cloned().unwrap_or_default(),
                         ]),
-                        build_type: props.get("ro.build.type").cloned().unwrap_or_default(),
                         android: first_non_empty(&[
                             props.get("ro.build.version.release").cloned().unwrap_or_default(),
                             props.get("ro.system.build.version.release").cloned().unwrap_or_default(),
+                            props.get("ro.vendor.build.version.release").cloned().unwrap_or_default(),
                         ]),
-                        build: first_non_empty(&[
-                            props.get("ro.build.version.incremental").cloned().unwrap_or_default(),
-                            props.get("ro.vendor.build.version.incremental").cloned().unwrap_or_default(),
-                        ]),
+                        build,
                         csc: first_non_empty(&[
                             props.get("ril.official_cscver").cloned().unwrap_or_default(),
                             props.get("ro.csc.sales_code").cloned().unwrap_or_default(),
+                            props.get("ro.boot.sales_code").cloned().unwrap_or_default(),
+                            props.get("ro.csc.countryiso_code").cloned().unwrap_or_default(),
                         ]),
                         security_patch: props
                             .get("ro.build.version.security_patch")
                             .cloned()
-                            .unwrap_or_default(),
-                        carrier: props.get("ro.csc.sales_code").cloned().unwrap_or_default(),
+                            .unwrap_or_else(|| "-".to_string()),
+                        carrier: first_non_empty(&[
+                            props.get("ro.csc.sales_code").cloned().unwrap_or_default(),
+                            props.get("ro.boot.sales_code").cloned().unwrap_or_default(),
+                            props.get("ro.csc.country_code").cloned().unwrap_or_default(),
+                        ]),
                         region: props
                             .get("ro.product.locale.region")
                             .cloned()
