@@ -364,14 +364,14 @@
         </div>
       </main>
 
-      <!-- 4. Floating Live Terminal Modal Dialog (Screenshot 1) -->
+      <!-- 4. Floating Live Terminal Modal Dialog -->
       <div class="terminal-modal-backdrop" id="terminalModal" style="display:none;">
         <div class="terminal-modal-window">
           <!-- Window Header Bar -->
           <div class="terminal-modal-header">
             <div class="modal-header-tagline">
-              <span class="modal-status-badge cancelled" id="modalRunStatusBadge">[CANCELLED]</span>
-              <span class="modal-node-title" id="modalNodeTitle">STS - syncmaster (09:...)</span>
+              <span class="modal-status-badge standby" id="modalRunStatusBadge">[STANDBY]</span>
+              <h3 class="modal-title-text">Logs</h3>
               <span class="modal-runtime-tag" id="modalRuntimeTag">0h 00m 00s</span>
             </div>
 
@@ -388,11 +388,24 @@
             </div>
           </div>
 
-          <!-- Window Tab Bar -->
-          <div class="terminal-modal-tabs" id="modalTerminalTabs">
-            <button class="terminal-tab active" data-tab="all">syncmaster</button>
-            <button class="terminal-tab" data-tab="suite">STS</button>
-            <button class="terminal-tab" data-tab="device" id="modalActiveDeviceTab">Active Device</button>
+          <!-- Window Chip Bar: PC ID (Select Model) & Testcase Chips -->
+          <div class="terminal-chips-bar" id="modalChipsBar">
+            <div class="terminal-chips-left">
+              <div class="terminal-chip node-tag">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+                <span id="modalNodeIdLabel">syncmaster</span>
+              </div>
+              <select id="modalDeviceSelect" class="terminal-chip-select" title="Pilih Model Perangkat">
+                <option value="all">Semua Perangkat</option>
+              </select>
+            </div>
+            <div class="terminal-chips-right" id="modalTestcaseChips">
+              <button class="terminal-tc-chip active" data-tc="all">ALL</button>
+              <button class="terminal-tc-chip" data-tc="getprop">GetpropSnapshot</button>
+              <button class="terminal-tc-chip" data-tc="bvt">BasicInfoTests</button>
+              <button class="terminal-tc-chip" data-tc="svt">SVTPreloadValidation</button>
+              <button class="terminal-tc-chip" data-tc="sdt">SDTDeviceTest</button>
+            </div>
           </div>
 
           <!-- Window Console Viewport -->

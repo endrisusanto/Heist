@@ -58,8 +58,15 @@ let activeRunDevices: string[] = [];
 let activeRunTools: string[] = ['getprop', 'bvt', 'svt', 'sdt'];
 
 let ws: WebSocket | null = null;
+interface LogEntry {
+  line: string;
+  level: 'normal' | 'sys' | 'warn' | 'err' | 'success';
+}
+const logEntries: LogEntry[] = [];
 let logHistory: string[] = [];
 let historyList: HistoryItem[] = loadHistoryFromDisk();
+let selectedModalDevice = 'all';
+let selectedModalTc = 'all';
 
 // DOM Elements
 const els = {
@@ -109,12 +116,13 @@ const els = {
   // Terminal Modal
   terminalModal: document.getElementById('terminalModal') as HTMLElement,
   modalRunStatusBadge: document.getElementById('modalRunStatusBadge') as HTMLElement,
-  modalNodeTitle: document.getElementById('modalNodeTitle') as HTMLElement,
+  modalNodeIdLabel: document.getElementById('modalNodeIdLabel') as HTMLElement,
+  modalDeviceSelect: document.getElementById('modalDeviceSelect') as HTMLSelectElement,
   modalRuntimeTag: document.getElementById('modalRuntimeTag') as HTMLElement,
   modalClearLogBtn: document.getElementById('modalClearLogBtn') as HTMLButtonElement,
   modalCopyLogBtn: document.getElementById('modalCopyLogBtn') as HTMLButtonElement,
   modalCloseBtn: document.getElementById('modalCloseBtn') as HTMLButtonElement,
-  modalTerminalTabs: document.getElementById('modalTerminalTabs') as HTMLElement,
+  modalChipsBar: document.getElementById('modalChipsBar') as HTMLElement,
   modalConsoleOutput: document.getElementById('modalConsoleOutput') as HTMLElement,
 
   // Preflight Modal
@@ -227,6 +235,7 @@ function renderAll() {
   renderStandbyDevices();
   renderWorkflow();
   renderHistory();
+  updateModalControls();
 }
 
 function renderStats() {
@@ -526,7 +535,10 @@ function startAutomation() {
   // Update Terminal Modal Tag
   els.modalRunStatusBadge.textContent = '[RUNNING]';
   els.modalRunStatusBadge.className = 'modal-status-badge running';
-  els.modalNodeTitle.textContent = `STS - ${activeRunNodeId} (${devices.length} dev)`;
+  if (els.modalNodeIdLabel) {
+    els.modalNodeIdLabel.textContent = activeRunNodeId;
+  }
+  updateModalControls();
 
   appendModalLog(`[Hub] Starting Automation Suite ${runId} across ${nodeBatches.size} node(s)...`, 'sys');
 
@@ -719,16 +731,93 @@ function saveHistoryToDisk(list: HistoryItem[]) {
   } catch (e) {}
 }
 
-// Terminal Modal Controls
+// Terminal Modal Controls & Filters
+function updateModalControls() {
+  if (els.modalNodeIdLabel) {
+    const activeNode = activeRunNodeId || (selectedNodeFilter !== 'all' ? selectedNodeFilter : Object.keys(fleet.nodes)[0] || 'syncmaster');
+    els.modalNodeIdLabel.textContent = activeNode;
+  }
+
+  if (els.modalDeviceSelect) {
+    const currentVal = selectedModalDevice;
+    els.modalDeviceSelect.innerHTML = '<option value="all">Semua Perangkat</option>';
+    const allDevs = getAllConnectedDevices();
+    for (const { device } of allDevs) {
+      const opt = document.createElement('option');
+      opt.value = device.serial;
+      opt.textContent = `${device.model || 'Device'} (${device.serial})`;
+      els.modalDeviceSelect.appendChild(opt);
+    }
+    if (Array.from(els.modalDeviceSelect.options).some(o => o.value === currentVal)) {
+      els.modalDeviceSelect.value = currentVal;
+    } else {
+      els.modalDeviceSelect.value = 'all';
+      selectedModalDevice = 'all';
+    }
+  }
+}
+
+function renderModalConsole() {
+  if (!els.modalConsoleOutput) return;
+  els.modalConsoleOutput.innerHTML = '';
+
+  const filtered = logEntries.filter((entry) => {
+    if (entry.level === 'sys') return true;
+
+    // Filter by Device
+    if (selectedModalDevice !== 'all') {
+      if (!entry.line.includes(selectedModalDevice)) {
+        return false;
+      }
+    }
+
+    // Filter by Testcase
+    if (selectedModalTc !== 'all') {
+      const query = selectedModalTc.toLowerCase();
+      const lineLower = entry.line.toLowerCase();
+      if (!lineLower.includes(query)) {
+        return false;
+      }
+    }
+
+    return true;
+  });
+
+  for (const entry of filtered) {
+    const div = document.createElement('div');
+    div.className = `term-row ${entry.level}`;
+    div.textContent = entry.line;
+    els.modalConsoleOutput.appendChild(div);
+  }
+
+  els.modalConsoleOutput.scrollTop = els.modalConsoleOutput.scrollHeight;
+}
+
 function appendModalLog(line: string, level: 'normal' | 'sys' | 'warn' | 'err' | 'success' = 'normal') {
   logHistory.push(line);
   if (logHistory.length > 2000) logHistory.shift();
 
-  const div = document.createElement('div');
-  div.className = `term-row ${level}`;
-  div.textContent = line;
-  els.modalConsoleOutput.appendChild(div);
-  els.modalConsoleOutput.scrollTop = els.modalConsoleOutput.scrollHeight;
+  logEntries.push({ line, level });
+  if (logEntries.length > 2000) logEntries.shift();
+
+  // Check if active filters allow this line
+  let passes = true;
+  if (level !== 'sys') {
+    if (selectedModalDevice !== 'all' && !line.includes(selectedModalDevice)) {
+      passes = false;
+    }
+    if (selectedModalTc !== 'all' && !line.toLowerCase().includes(selectedModalTc.toLowerCase())) {
+      passes = false;
+    }
+  }
+
+  if (passes) {
+    const div = document.createElement('div');
+    div.className = `term-row ${level}`;
+    div.textContent = line;
+    els.modalConsoleOutput.appendChild(div);
+    els.modalConsoleOutput.scrollTop = els.modalConsoleOutput.scrollHeight;
+  }
 }
 
 function sendToHub(msg: object) {
@@ -909,6 +998,8 @@ function setupEventListeners() {
 
   // Terminal Modal
   els.openTerminalLogsBtn.addEventListener('click', () => {
+    updateModalControls();
+    renderModalConsole();
     els.terminalModal.style.display = 'flex';
   });
 
@@ -925,6 +1016,7 @@ function setupEventListeners() {
   els.modalClearLogBtn.addEventListener('click', () => {
     els.modalConsoleOutput.innerHTML = '';
     logHistory = [];
+    logEntries.length = 0;
   });
 
   els.modalCopyLogBtn.addEventListener('click', () => {
@@ -932,12 +1024,22 @@ function setupEventListeners() {
     alert('Log disalin ke clipboard.');
   });
 
-  // Terminal Tab Switching
-  document.querySelectorAll('.terminal-tab').forEach((tabBtn) => {
-    tabBtn.addEventListener('click', (e) => {
-      document.querySelectorAll('.terminal-tab').forEach(t => t.classList.remove('active'));
+  // Modal Device Select Filter
+  if (els.modalDeviceSelect) {
+    els.modalDeviceSelect.addEventListener('change', () => {
+      selectedModalDevice = els.modalDeviceSelect.value;
+      renderModalConsole();
+    });
+  }
+
+  // Terminal Testcase Chips Filter
+  document.querySelectorAll('.terminal-tc-chip').forEach((chipBtn) => {
+    chipBtn.addEventListener('click', (e) => {
+      document.querySelectorAll('.terminal-tc-chip').forEach(c => c.classList.remove('active'));
       const clicked = e.currentTarget as HTMLElement;
       clicked.classList.add('active');
+      selectedModalTc = clicked.dataset.tc || 'all';
+      renderModalConsole();
     });
   });
 
