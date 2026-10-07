@@ -108,11 +108,6 @@
   -webkit-tap-highlight-color: transparent;
 }
 
-/* Smooth Fadeaway Theme Transition without reflow lag */
-body, .app-layout, .dashboard-card, .hub-header, .hub-filter-bar, .sub-accordion-box, .sub-accordion-header, table, th, td, .terminal-modal-window, .terminal-modal-header, .stat-pill-tag, .stat-pill-btn, .custom-select, .search-input-wrap input, .btn-terminal-toggle {
-  transition: background-color 0.22s ease, border-color 0.22s ease, color 0.22s ease;
-}
-
 html, body {
   background-color: var(--bg-page);
   color: var(--text-main);
