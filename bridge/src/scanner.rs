@@ -123,10 +123,12 @@ pub fn list_devices() -> Result<Vec<DeviceInfo>, String> {
                         token_value(&trimmed, "model"),
                         props.get("ro.product.model").cloned().unwrap_or_default(),
                         props.get("ro.product.vendor.model").cloned().unwrap_or_default(),
+                        token_value(&trimmed, "device"),
                     ]);
 
                     let mut build = first_non_empty(&[
                         props.get("ro.build.PDA").cloned().unwrap_or_default(),
+                        props.get("ro.build.official.version").cloned().unwrap_or_default(),
                         props.get("ro.boot.bootloader").cloned().unwrap_or_default(),
                         props.get("ro.bootloader").cloned().unwrap_or_default(),
                         props.get("ro.build.version.incremental").cloned().unwrap_or_default(),
@@ -135,18 +137,37 @@ pub fn list_devices() -> Result<Vec<DeviceInfo>, String> {
                         props.get("ro.vendor.build.version.incremental").cloned().unwrap_or_default(),
                         props.get("ro.odm.build.version.incremental").cloned().unwrap_or_default(),
                         props.get("ro.product.build.version.incremental").cloned().unwrap_or_default(),
+                        props.get("ril.sw_ver").cloned().unwrap_or_default(),
+                        props.get("ro.build.version.pda").cloned().unwrap_or_default(),
                         props.get("ro.build.display.id").cloned().unwrap_or_default(),
                         props.get("ro.build.id").cloned().unwrap_or_default(),
+                        props.get("ro.system.build.id").cloned().unwrap_or_default(),
+                        props.get("ro.vendor.build.id").cloned().unwrap_or_default(),
                     ]);
 
-                    // Single getprop fallback if full getprop map missed PDA
+                    // Individual getprop fallback if full getprop map missed PDA
                     if (build == "-" || build.is_empty()) && state == "device" {
-                        let mut fallback_cmd = Command::new(&adb_clone);
-                        fallback_cmd.args(["-s", &serial, "shell", "getprop ro.build.PDA || getprop ro.boot.bootloader || getprop ro.build.version.incremental"]);
-                        if let Ok(val) = run_output_with_timeout(fallback_cmd, Duration::from_secs(3)) {
-                            let clean_val = val.trim().to_string();
-                            if !clean_val.is_empty() {
-                                build = clean_val;
+                        let candidate_props = [
+                            "ro.build.PDA",
+                            "ro.build.official.version",
+                            "ro.boot.bootloader",
+                            "ro.bootloader",
+                            "ro.build.version.incremental",
+                            "ril.sw_ver",
+                            "ro.build.display.id",
+                            "ro.build.id",
+                            "ro.system.build.version.incremental",
+                            "ro.vendor.build.version.incremental",
+                        ];
+                        for prop in candidate_props {
+                            let mut cmd = Command::new(&adb_clone);
+                            cmd.args(["-s", &serial, "shell", "getprop", prop]);
+                            if let Ok(val) = run_output_with_timeout(cmd, Duration::from_millis(800)) {
+                                let clean_val = val.trim().to_string();
+                                if !clean_val.is_empty() && clean_val != "-" {
+                                    build = clean_val;
+                                    break;
+                                }
                             }
                         }
                     }
@@ -221,16 +242,29 @@ fn adb_props(adb: &str, serial: &str) -> Result<HashMap<String, String>, String>
 }
 
 fn parse_getprop_line(line: &str) -> Option<(String, String)> {
-    let open1 = line.find('[')?;
-    let close1 = line[open1 + 1..].find(']')? + open1 + 1;
-    let key = &line[open1 + 1..close1];
-
-    let rest = &line[close1 + 1..];
-    let open2 = rest.find('[')? + close1 + 1;
-    let close2 = line[open2 + 1..].rfind(']')? + open2 + 1;
-    let val = &line[open2 + 1..close2];
-
-    Some((key.to_string(), val.to_string()))
+    let trimmed = line.trim();
+    if let Some(open1) = trimmed.find('[') {
+        if let Some(close1) = trimmed[open1 + 1..].find(']') {
+            let key = &trimmed[open1 + 1..open1 + 1 + close1];
+            let rest = &trimmed[open1 + 1 + close1 + 1..];
+            if let Some(open2) = rest.find('[') {
+                if let Some(close2) = rest.rfind(']') {
+                    if open2 < close2 {
+                        let val = &rest[open2 + 1..close2];
+                        return Some((key.to_string(), val.to_string()));
+                    }
+                }
+            }
+        }
+    }
+    if let Some((k, v)) = trimmed.split_once(':') {
+        let clean_k = k.trim().trim_matches(|c| c == '[' || c == ']');
+        let clean_v = v.trim().trim_matches(|c| c == '[' || c == ']');
+        if !clean_k.is_empty() && !clean_v.is_empty() {
+            return Some((clean_k.to_string(), clean_v.to_string()));
+        }
+    }
+    None
 }
 
 fn token_value(line: &str, key: &str) -> String {

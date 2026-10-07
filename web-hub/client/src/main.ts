@@ -664,8 +664,13 @@ function finishCurrentRun(status: 'FINISHED' | 'CANCELLED') {
 function getDevicePda(serial: string): string {
   for (const node of Object.values(fleet.nodes)) {
     const dev = node.devices.find((d) => d.serial === serial);
-    if (dev && dev.build && dev.build !== '-' && dev.build !== 'UNKNOWN') {
-      return dev.build;
+    if (dev) {
+      if (dev.build && dev.build !== '-' && dev.build !== 'UNKNOWN' && dev.build.trim() !== '') {
+        return dev.build.trim();
+      }
+      if (dev.csc && dev.csc !== '-' && dev.csc.trim() !== '') {
+        return dev.csc.trim();
+      }
     }
   }
   return serial;
@@ -682,7 +687,7 @@ function getDeviceModel(serial: string): string {
 }
 
 // Real Download Trigger Function
-(window as any).downloadFile = function(fileName: string, tool?: string, serial?: string, nodeId?: string, pda?: string, model?: string) {
+(window as any).downloadFile = function(fileName: string, tool?: string, serial?: string, nodeId?: string, pda?: string, model?: string, mode?: string) {
   const effectivePda = pda || (serial ? getDevicePda(serial) : '');
   const effectiveModel = model || (serial ? getDeviceModel(serial) : '');
   const params = new URLSearchParams({
@@ -692,6 +697,7 @@ function getDeviceModel(serial: string): string {
     ...(nodeId ? { nodeId } : {}),
     ...(effectivePda ? { pda: effectivePda } : {}),
     ...(effectiveModel ? { model: effectiveModel } : {}),
+    ...(mode ? { mode } : {}),
   });
   const url = `/api/download?${params.toString()}`;
   const link = document.createElement('a');
@@ -798,7 +804,7 @@ function renderHistory() {
         <td>
           ${
             isFinished
-              ? `<a href="#" class="archive-pill-link" onclick="window.downloadFile('${item.archiveName}', 'all', '${item.devices[0] || 'device'}', '${item.nodeId}'); return false;">${item.archiveName}</a>`
+              ? `<a href="#" class="archive-pill-link" onclick="window.downloadFile('${item.archiveName}', 'all', '${item.devices[0] || 'device'}', '${item.nodeId}', undefined, undefined, '${item.mode}'); return false;">${item.archiveName}</a>`
               : `<span style="color: var(--text-muted); font-size: 10.5px;">No Zip</span>`
           }
         </td>

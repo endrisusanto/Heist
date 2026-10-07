@@ -404,12 +404,36 @@ const server = http.createServer((req, res) => {
     ]);
   }
 
-  function getMasterArchiveZipBuffer(pda: string, model: string, serial: string, nodeId: string): Buffer {
-    // Overall RESULT ARCHIVE contains individual testcase zips nested inside
-    const getpropZip = getTestcaseZipBuffer('Getprop', pda, model, serial, nodeId);
-    const bvtZip = getTestcaseZipBuffer('BVT', pda, model, serial, nodeId);
-    const svtZip = getTestcaseZipBuffer('SVT', pda, model, serial, nodeId);
-    const sdtZip = getTestcaseZipBuffer('SDT', pda, model, serial, nodeId);
+  function getMasterArchiveZipBuffer(pda: string, model: string, serial: string, nodeId: string, activeTools: string[] = []): Buffer {
+    const files: Array<{ name: string; content: string | Buffer }> = [];
+    const bundledNames: string[] = [];
+
+    const toolsLower = activeTools.map((t) => t.toLowerCase().trim()).filter(Boolean);
+    const includeAll = toolsLower.length === 0 || toolsLower.includes('all');
+
+    if (includeAll || toolsLower.some((t) => t.includes('getprop'))) {
+      const getpropZip = getTestcaseZipBuffer('Getprop', pda, model, serial, nodeId);
+      files.push({ name: `Getprop_${pda}.zip`, content: getpropZip });
+      bundledNames.push(`Getprop_${pda}.zip`);
+    }
+
+    if (includeAll || toolsLower.some((t) => t.includes('bvt') || t.includes('basic'))) {
+      const bvtZip = getTestcaseZipBuffer('BVT', pda, model, serial, nodeId);
+      files.push({ name: `BVT_${pda}.zip`, content: bvtZip });
+      bundledNames.push(`BVT_${pda}.zip`);
+    }
+
+    if (includeAll || toolsLower.some((t) => t.includes('svt') || t.includes('preload'))) {
+      const svtZip = getTestcaseZipBuffer('SVT', pda, model, serial, nodeId);
+      files.push({ name: `SVT_${pda}.zip`, content: svtZip });
+      bundledNames.push(`SVT_${pda}.zip`);
+    }
+
+    if (includeAll || toolsLower.some((t) => t.includes('sdt') || t.includes('device'))) {
+      const sdtZip = getTestcaseZipBuffer('SDT', pda, model, serial, nodeId);
+      files.push({ name: `SDT_${pda}.zip`, content: sdtZip });
+      bundledNames.push(`SDT_${pda}.zip`);
+    }
 
     const nowStr = new Date().toISOString();
     const summaryText = `ATM GBA Hub - Test Execution Master Archive\n` +
@@ -421,19 +445,11 @@ const server = http.createServer((req, res) => {
                         `Device Serial: ${serial}\n` +
                         `Timestamp:     ${nowStr}\n` +
                         `Status:        PASSED / FINISHED\n\n` +
-                        `Bundled Testcase Archives:\n` +
-                        `  - Getprop_${pda}.zip\n` +
-                        `  - BVT_${pda}.zip\n` +
-                        `  - SVT_${pda}.zip\n` +
-                        `  - SDT_${pda}.zip\n`;
+                        `Bundled Testcases (${bundledNames.length} executed):\n` +
+                        bundledNames.map((n) => `  - ${n}`).join('\n') + '\n';
 
-    return createZipBuffer([
-      { name: `Getprop_${pda}.zip`, content: getpropZip },
-      { name: `BVT_${pda}.zip`, content: bvtZip },
-      { name: `SVT_${pda}.zip`, content: svtZip },
-      { name: `SDT_${pda}.zip`, content: sdtZip },
-      { name: 'summary.txt', content: summaryText }
-    ]);
+    files.push({ name: 'summary.txt', content: summaryText });
+    return createZipBuffer(files);
   }
 
   // File download endpoint
@@ -441,28 +457,29 @@ const server = http.createServer((req, res) => {
     const urlObj = new URL(req.url, `http://${req.headers.host}`);
     const requestedFile = urlObj.searchParams.get('file') || 'ATM_results.zip';
     const tool = (urlObj.searchParams.get('tool') || '').toLowerCase();
+    const rawTools = urlObj.searchParams.get('tools') || urlObj.searchParams.get('mode') || '';
     const serial = urlObj.searchParams.get('serial') || 'device';
     const nodeId = urlObj.searchParams.get('nodeId') || 'syncmaster';
     let pda = urlObj.searchParams.get('pda') || '';
     let model = urlObj.searchParams.get('model') || '';
 
     // Auto-resolve PDA and Model from fleetState if not explicitly provided
-    if (!pda || pda === 'device' || !model || model === 'UNKNOWN') {
+    if (!pda || pda === 'device' || pda === '-' || pda === 'UNKNOWN') {
       for (const node of Object.values(fleetState.nodes)) {
         const found = node.devices.find((d) => d.serial === serial);
         if (found) {
-          if (!pda && found.build && found.build !== '-' && found.build !== 'UNKNOWN') {
-            pda = found.build;
+          if (found.build && found.build !== '-' && found.build !== 'UNKNOWN') {
+            pda = found.build.trim();
           }
-          if (!model && found.model && found.model !== '-' && found.model !== 'UNKNOWN') {
-            model = found.model;
+          if ((!model || model === 'UNKNOWN') && found.model && found.model !== '-' && found.model !== 'UNKNOWN') {
+            model = found.model.trim();
           }
         }
       }
     }
 
     // Try extracting PDA from requested filename (e.g. Getprop_A055FXXSIDZI3.zip or ATM_A055FXXSIDZI3.zip)
-    if (!pda || pda === 'device') {
+    if (!pda || pda === 'device' || pda === '-') {
       const match = requestedFile.match(/^(?:ATM|Getprop|BVT|SVT|SDT)_([^.]+)\.zip$/i);
       if (match && match[1]) {
         pda = match[1];
@@ -480,7 +497,8 @@ const server = http.createServer((req, res) => {
     // 1. Check if user requests Master RESULT ARCHIVE (ATM_{PDA}.zip)
     if (tool === 'all' || safeName.startsWith('ATM_') || safeName.includes('ATM')) {
       const outName = `ATM_${pda}.zip`;
-      const masterZip = getMasterArchiveZipBuffer(pda, model, serial, nodeId);
+      const activeTools = rawTools ? rawTools.split(/[,+]/).map((t) => t.trim().toLowerCase()).filter(Boolean) : [];
+      const masterZip = getMasterArchiveZipBuffer(pda, model, serial, nodeId, activeTools);
 
       res.writeHead(200, {
         'Content-Type': 'application/zip',
