@@ -29,6 +29,7 @@ function resolveClientDist(): string {
 }
 
 const CLIENT_DIST = resolveClientDist();
+const RESULTS_ROOT = process.env.RESULTS_DIR || path.join(process.cwd(), 'data');
 
 // In-memory fleet state
 const fleetState: FleetState = {
@@ -204,15 +205,7 @@ const server = http.createServer((req, res) => {
 
   // Helper functions for Results generation and packaging
   function findLocalResultFolder(model: string, pda: string, toolFolder: string): string | null {
-    const candidateRoots = [
-      '/home/endri-pro/Videos/ATM',
-      '/home/endri-pro/Videos/ATM/ATMv5_20260429',
-      '/home/endri-pro/Videos/ATM/ATMv5_20260909',
-      '/run/media/endri-pro/BINARY_HDD/AUTO',
-      '/run/media/endri-pro/BINARY_HDD1/AUTO',
-      process.cwd(),
-      path.resolve(process.cwd(), '..')
-    ];
+    const candidateRoots = [RESULTS_ROOT];
 
     for (const root of candidateRoots) {
       const p1 = path.join(root, 'results', model, pda, toolFolder);
@@ -251,9 +244,8 @@ const server = http.createServer((req, res) => {
     return results;
   }
 
-  const MINIMAL_PNG = Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000a49444154789c63000100000500010d0a2d450000000049454e44ae426082', 'hex');
 
-  function getTestcaseZipBuffer(toolName: string, pda: string, model: string, serial: string, nodeId: string): Buffer {
+  function getTestcaseZipBuffer(toolName: string, pda: string, model: string): Buffer | null {
     const tLower = toolName.toLowerCase();
     let folderName = 'Getprop';
     if (tLower.includes('bvt')) folderName = 'BVT';
@@ -270,224 +262,27 @@ const server = http.createServer((req, res) => {
       }
     }
 
-    // 2. Generate standard high-fidelity testcase output files
-    const nowStr = new Date().toISOString();
-    const nowUtc = new Date().toUTCString();
-
-    if (folderName === 'Getprop') {
-      return createZipBuffer([
-        {
-          name: 'Getprop_XID.txt',
-          content: `[ro.product.model]: [${model}]\n` +
-                   `[ro.build.PDA]: [${pda}]\n` +
-                   `[ro.build.version.incremental]: [${pda}]\n` +
-                   `[ro.serialno]: [${serial}]\n` +
-                   `[ro.build.type]: [user]\n` +
-                   `[ro.build.flavor]: [${model}-user]\n` +
-                   `[ro.build.date]: [${nowUtc}]\n` +
-                   `[ro.product.brand]: [samsung]\n` +
-                   `[ro.product.manufacturer]: [samsung]\n` +
-                   `[ro.product.device]: [${model.replace('SM-', '').toLowerCase()}]\n` +
-                   `[ro.boot.bootloader]: [${pda}]\n` +
-                   `[ro.bootloader]: [${pda}]\n` +
-                   `[ro.csc.sales_code]: [XID]\n` +
-                   `[ro.csc.country_code]: [Indonesia]\n` +
-                   `[ro.carrier]: [unknown]\n` +
-                   `[ro.hardware]: [samsungexynos]\n` +
-                   `[ro.build.display.id]: [${pda}]\n`
-        }
-      ]);
-    }
-
-    if (folderName === 'BVT') {
-      return createZipBuffer([
-        {
-          name: 'bvt_result.xml',
-          content: `<?xml version="1.0" encoding="UTF-8"?>\n` +
-                   `<Result start="${Date.now() - 18000}" end="${Date.now()}" plan="BVT" suite_name="BasicInfoTests" suite_version="5.0" command_line_args="run bvt">\n` +
-                   `  <Summary pass="12" failed="0" modules_done="1" modules_total="1" />\n` +
-                   `  <Module name="BasicInfoTests" abi="arm64-v8a" runtime="18420" done="true" pass="12" total_tests="12">\n` +
-                   `    <TestCase name="com.sec.bvt.BasicInfo">\n` +
-                   `      <Test result="pass" name="testDeviceModel" />\n` +
-                   `      <Test result="pass" name="testPdaVersion" />\n` +
-                   `      <Test result="pass" name="testSecurityPatch" />\n` +
-                   `      <Test result="pass" name="testCarrierConfig" />\n` +
-                   `      <Test result="pass" name="testSystemBuildFingerprint" />\n` +
-                   `      <Test result="pass" name="testOdmBuildFingerprint" />\n` +
-                   `      <Test result="pass" name="testCscSalesCode" />\n` +
-                   `      <Test result="pass" name="testProductBrand" />\n` +
-                   `      <Test result="pass" name="testManufacturer" />\n` +
-                   `      <Test result="pass" name="testBootloaderVersion" />\n` +
-                   `      <Test result="pass" name="testHardwareRevision" />\n` +
-                   `      <Test result="pass" name="testInstrumentationStatus" />\n` +
-                   `    </TestCase>\n` +
-                   `  </Module>\n` +
-                   `</Result>\n`
-        },
-        {
-          name: 'checksum.data',
-          content: `bvt_result.xml: 8f2389dcba2e45f9a0123cbef89412\n` +
-                   `compatibility_result.css: 4a2b1c9d8e7f6a5b\n` +
-                   `compatibility_result.xsd: 1122334455667788\n` +
-                   `compatibility_result.xsl: aabbccddeeff0011\n` +
-                   `logo.png: d41d8cd98f00b204e9800998ecf8427e\n`
-        },
-        {
-          name: 'compatibility_result.css',
-          content: `body { font-family: sans-serif; background: #fff; color: #333; margin: 20px; }\n` +
-                   `table { border-collapse: collapse; width: 100%; }\n` +
-                   `th, td { border: 1px solid #ddd; padding: 8px; font-size: 12px; }\n` +
-                   `th { background-color: #f2f2f2; text-align: left; }\n` +
-                   `.pass { color: #16a34a; font-weight: bold; }\n` +
-                   `.fail { color: #dc2626; font-weight: bold; }\n`
-        },
-        {
-          name: 'compatibility_result.xsd',
-          content: `<?xml version="1.0" encoding="UTF-8"?>\n` +
-                   `<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">\n` +
-                   `  <xs:element name="Result">\n` +
-                   `    <xs:complexType>\n` +
-                   `      <xs:sequence>\n` +
-                   `        <xs:element name="Summary" minOccurs="0" maxOccurs="1"/>\n` +
-                   `        <xs:element name="Module" minOccurs="0" maxOccurs="unbounded"/>\n` +
-                   `      </xs:sequence>\n` +
-                   `      <xs:attribute name="suite_name" type="xs:string"/>\n` +
-                   `    </xs:complexType>\n` +
-                   `  </xs:element>\n` +
-                   `</xs:schema>\n`
-        },
-        {
-          name: 'compatibility_result.xsl',
-          content: `<?xml version="1.0" encoding="UTF-8"?>\n` +
-                   `<xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">\n` +
-                   `  <xsl:template match="/">\n` +
-                   `    <html>\n` +
-                   `      <head><title>BVT Test Result</title></head>\n` +
-                   `      <body>\n` +
-                   `        <h2>BVT Compatibility Test Result</h2>\n` +
-                   `        <p>Suite: <xsl:value-of select="Result/@suite_name"/></p>\n` +
-                   `      </body>\n` +
-                   `    </html>\n` +
-                   `  </xsl:template>\n` +
-                   `</xsl:stylesheet>\n`
-        },
-        {
-          name: 'logo.png',
-          content: MINIMAL_PNG
-        }
-      ]);
-    }
-
-    if (folderName === 'SVT') {
-      return createZipBuffer([
-        {
-          name: 'svt_result.xml',
-          content: `<?xml version="1.0" encoding="UTF-8"?>\n` +
-                   `<SvtReport model="${model}" pda="${pda}" timestamp="${nowStr}">\n` +
-                   `  <Status>PASS</Status>\n` +
-                   `  <PreloadedApps count="48" verified="48" missing="0"/>\n` +
-                   `  <CscPackages status="VALID"/>\n` +
-                   `</SvtReport>\n`
-        },
-        {
-          name: 'preload_apps.json',
-          content: JSON.stringify({
-            model,
-            pda,
-            serial,
-            validatedAt: nowStr,
-            status: 'PASSED',
-            apps: ['com.sec.android.app.myfiles', 'com.sec.android.gallery3d', 'com.samsung.android.messaging']
-          }, null, 2)
-        },
-        {
-          name: 'csc_feature_report.xml',
-          content: `<CscFeatures salesCode="XID" country="Indonesia" valid="true"/>\n`
-        }
-      ]);
-    }
-
-    // SDT fallback
-    return createZipBuffer([
-      {
-        name: 'XID_SDT.xml',
-        content: `<?xml version="1.0" encoding="UTF-8"?>\n` +
-                 `<SdtResult model="${model}" pda="${pda}" serial="${serial}" timestamp="${nowStr}">\n` +
-                 `  <Sensors status="PASS" tests="8" failures="0"/>\n` +
-                 `  <HardwareDiagnostics status="PASS"/>\n` +
-                 `  <ExitCode>0</ExitCode>\n` +
-                 `</SdtResult>\n`
-      },
-      {
-        name: 'sensor_diagnostics.txt',
-        content: `[SDT Sensor Diagnostics Report]\n` +
-                 `Device: ${serial} (${model})\n` +
-                 `PDA: ${pda}\n` +
-                 `Accelerometer: OK\n` +
-                 `Proximity: OK\n` +
-                 `Light Sensor: OK\n` +
-                 `Status: PASS\n`
-      },
-      {
-        name: 'device_test_summary.json',
-        content: JSON.stringify({
-          tool: 'SDT',
-          model,
-          pda,
-          serial,
-          exitCode: 0,
-          status: 'PASSED'
-        }, null, 2)
-      }
-    ]);
+    return null;
   }
 
-  function getMasterArchiveZipBuffer(pda: string, model: string, serial: string, nodeId: string, activeTools: string[] = []): Buffer {
-    const files: Array<{ name: string; content: string | Buffer }> = [];
-    const bundledNames: string[] = [];
+  const TOOL_KEYS: Array<[string, (t: string) => boolean]> = [
+    ['Getprop', (t) => t.includes('getprop')],
+    ['BVT', (t) => t.includes('bvt') || t.includes('basic')],
+    ['SVT', (t) => t.includes('svt') || t.includes('preload')],
+    ['SDT', (t) => t.includes('sdt')]
+  ];
 
+  function getMasterArchiveZipBuffer(pda: string, model: string, activeTools: string[]): Buffer | null {
     const toolsLower = activeTools.map((t) => t.toLowerCase().trim()).filter(Boolean);
     const includeAll = toolsLower.length === 0 || toolsLower.includes('all');
+    const files: Array<{ name: string; content: Buffer }> = [];
 
-    if (includeAll || toolsLower.some((t) => t.includes('getprop'))) {
-      const getpropZip = getTestcaseZipBuffer('Getprop', pda, model, serial, nodeId);
-      files.push({ name: `Getprop_${pda}.zip`, content: getpropZip });
-      bundledNames.push(`Getprop_${pda}.zip`);
+    for (const [folder, match] of TOOL_KEYS) {
+      if (!includeAll && !toolsLower.some(match)) continue;
+      const zip = getTestcaseZipBuffer(folder, pda, model);
+      if (zip) files.push({ name: `${folder}_${pda}.zip`, content: zip });
     }
-
-    if (includeAll || toolsLower.some((t) => t.includes('bvt') || t.includes('basic'))) {
-      const bvtZip = getTestcaseZipBuffer('BVT', pda, model, serial, nodeId);
-      files.push({ name: `BVT_${pda}.zip`, content: bvtZip });
-      bundledNames.push(`BVT_${pda}.zip`);
-    }
-
-    if (includeAll || toolsLower.some((t) => t.includes('svt') || t.includes('preload'))) {
-      const svtZip = getTestcaseZipBuffer('SVT', pda, model, serial, nodeId);
-      files.push({ name: `SVT_${pda}.zip`, content: svtZip });
-      bundledNames.push(`SVT_${pda}.zip`);
-    }
-
-    if (includeAll || toolsLower.some((t) => t.includes('sdt') || t.includes('device'))) {
-      const sdtZip = getTestcaseZipBuffer('SDT', pda, model, serial, nodeId);
-      files.push({ name: `SDT_${pda}.zip`, content: sdtZip });
-      bundledNames.push(`SDT_${pda}.zip`);
-    }
-
-    const nowStr = new Date().toISOString();
-    const summaryText = `ATM GBA Hub - Test Execution Master Archive\n` +
-                        `==========================================\n` +
-                        `Archive:       ATM_${pda}.zip\n` +
-                        `Node ID:       ${nodeId}\n` +
-                        `Model:         ${model}\n` +
-                        `PDA Version:   ${pda}\n` +
-                        `Device Serial: ${serial}\n` +
-                        `Timestamp:     ${nowStr}\n` +
-                        `Status:        PASSED / FINISHED\n\n` +
-                        `Bundled Testcases (${bundledNames.length} executed):\n` +
-                        bundledNames.map((n) => `  - ${n}`).join('\n') + '\n';
-
-    files.push({ name: 'summary.txt', content: summaryText });
-    return createZipBuffer(files);
+    return files.length ? createZipBuffer(files) : null;
   }
 
   // File download endpoint
@@ -519,15 +314,7 @@ const server = http.createServer((req, res) => {
     // Try extracting PDA from requested filename (e.g. Getprop_A055FXXSIDZI3.zip or ATM_A055FXXSIDZI3.zip)
     if (!pda || pda === 'device' || pda === '-') {
       const match = requestedFile.match(/^(?:ATM|Getprop|BVT|SVT|SDT)_([^.]+)\.zip$/i);
-      if (match && match[1]) {
-        pda = match[1];
-      } else {
-        pda = 'A055FXXSIDZI3';
-      }
-    }
-
-    if (!model || model === 'UNKNOWN') {
-      model = 'SM-A055F';
+      if (match && match[1]) pda = match[1];
     }
 
     const safeName = path.basename(requestedFile);
@@ -536,7 +323,12 @@ const server = http.createServer((req, res) => {
     if (tool === 'all' || safeName.startsWith('ATM_') || safeName.includes('ATM')) {
       const outName = `ATM_${pda}.zip`;
       const activeTools = rawTools ? rawTools.split(/[,+]/).map((t) => t.trim().toLowerCase()).filter(Boolean) : [];
-      const masterZip = getMasterArchiveZipBuffer(pda, model, serial, nodeId, activeTools);
+      const masterZip = getMasterArchiveZipBuffer(pda, model, activeTools);
+      if (!masterZip) {
+        res.writeHead(404, { 'Content-Type': 'text/plain' });
+        res.end('Result belum tersedia untuk perangkat/PDA ini.');
+        return;
+      }
 
       res.writeHead(200, {
         'Content-Type': 'application/zip',
@@ -555,7 +347,12 @@ const server = http.createServer((req, res) => {
     else if (tool.includes('getprop') || safeName.toLowerCase().startsWith('getprop')) tcName = 'Getprop';
 
     const outTcName = `${tcName}_${pda}.zip`;
-    const tcZip = getTestcaseZipBuffer(tcName, pda, model, serial, nodeId);
+    const tcZip = getTestcaseZipBuffer(tcName, pda, model);
+    if (!tcZip) {
+      res.writeHead(404, { 'Content-Type': 'text/plain' });
+      res.end('Result belum tersedia untuk perangkat/PDA ini.');
+      return;
+    }
 
     res.writeHead(200, {
       'Content-Type': 'application/zip',
@@ -686,6 +483,21 @@ wssBridge.on('connection', (ws, req) => {
               line: payload.line
             }
           });
+          break;
+        }
+
+        case 'RunResults': {
+          for (const set of payload.sets || []) {
+            const safe = (v: string) => String(v).replace(/[\\/]|\.\./g, '_');
+            const dir = path.join(RESULTS_ROOT, 'results', safe(set.model), safe(set.pda), safe(set.tool));
+            fs.rmSync(dir, { recursive: true, force: true });
+            for (const f of set.files) {
+              const target = path.join(dir, path.normalize(f.path).replace(/^(\.\.[\\/])+/, ''));
+              if (!target.startsWith(dir)) continue;
+              fs.mkdirSync(path.dirname(target), { recursive: true });
+              fs.writeFileSync(target, Buffer.from(f.b64, 'base64'));
+            }
+          }
           break;
         }
 

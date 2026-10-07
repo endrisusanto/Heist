@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod preflight;
+mod results;
 mod runner;
 mod scanner;
 mod types;
@@ -510,6 +511,9 @@ fn handle_hub_command(
             let runner_state = state.runner.clone();
             let app_log = app.clone();
             let app_finish = app.clone();
+            let tools = req.tools.clone();
+            let root_finish = atm_root.clone();
+            let started = std::time::SystemTime::now() - Duration::from_secs(5);
 
             let res = runner::run_batch_task(
                 runner_state,
@@ -521,6 +525,10 @@ fn handle_hub_command(
                 },
                 move |finished| {
                     emit_log(&app_finish, "info", &format!("Automation run {} completed with exit code {}", finished.run_id, finished.exit_code));
+                    let sets = results::collect(&root_finish, &finished.devices, &tools, started);
+                    if !sets.is_empty() {
+                        let _ = tx_finish.send(BridgeToHubMessage::RunResults { run_id: finished.run_id.clone(), sets });
+                    }
                     let _ = tx_finish.send(BridgeToHubMessage::RunFinished(finished));
                 },
             );

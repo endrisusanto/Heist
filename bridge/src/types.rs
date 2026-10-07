@@ -75,6 +75,21 @@ pub struct RunFinished {
     pub devices: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResultFile {
+    pub path: String,
+    pub b64: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResultSet {
+    pub serial: String,
+    pub model: String,
+    pub pda: String,
+    pub tool: String,
+    pub files: Vec<ResultFile>,
+}
+
 /// Messages sent from Bridge to Hub Server
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload")]
@@ -93,6 +108,10 @@ pub enum BridgeToHubMessage {
         line: String,
     },
     RunFinished(RunFinished),
+    RunResults {
+        run_id: String,
+        sets: Vec<ResultSet>,
+    },
     PreflightReport {
         report: Vec<String>,
     },
