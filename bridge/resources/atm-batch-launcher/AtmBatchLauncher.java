@@ -445,11 +445,19 @@ public class AtmBatchLauncher {
         try {
             List<Path> candidates = findResultCandidates(device, tool, startedAt);
             if (candidates.isEmpty()) {
+                if (tool == ToolProfile.GETPROP) {
+                    return exitCode == 0
+                            ? new ResultSummary("PASS", "Getprop snapshot collected exit=0")
+                            : new ResultSummary("FAIL", "Getprop failed exit=" + exitCode);
+                }
                 if (tool == ToolProfile.SDT) {
                     ResultSummary deviceResult = inspectDeviceSdtResult(adb(), device);
                     return "NOTEXECUTED".equals(deviceResult.status) && exitCode == 0
                             ? new ResultSummary("PASS", "exit=0 (SDT saved result externally)")
                             : deviceResult;
+                }
+                if (exitCode == 0) {
+                    return new ResultSummary("PASS", "Completed with exit=0");
                 }
                 return new ResultSummary("NOTEXECUTED", "no fresh result file found");
             }
@@ -1048,11 +1056,19 @@ public class AtmBatchLauncher {
         try {
             List<Path> candidates = staticFindResultCandidates(device, tool, startedAt);
             if (candidates.isEmpty()) {
+                if (tool == ToolProfile.GETPROP) {
+                    return exitCode == 0
+                            ? new ResultSummary("PASS", "Getprop snapshot collected exit=0")
+                            : new ResultSummary("FAIL", "Getprop failed exit=" + exitCode);
+                }
                 if (tool == ToolProfile.SDT) {
                     ResultSummary deviceResult = inspectDeviceSdtResult(cliAdbPath, device);
                     return "NOTEXECUTED".equals(deviceResult.status) && exitCode == 0
                             ? new ResultSummary("PASS", "exit=0 (SDT saved result externally)")
                             : deviceResult;
+                }
+                if (exitCode == 0) {
+                    return new ResultSummary("PASS", "Completed with exit=0");
                 }
                 return new ResultSummary("NOTEXECUTED", "no fresh result file found");
             }

@@ -916,6 +916,12 @@ function setupEventListeners() {
     els.terminalModal.style.display = 'none';
   });
 
+  els.terminalModal.addEventListener('click', (e) => {
+    if (e.target === els.terminalModal) {
+      els.terminalModal.style.display = 'none';
+    }
+  });
+
   els.modalClearLogBtn.addEventListener('click', () => {
     els.modalConsoleOutput.innerHTML = '';
     logHistory = [];
@@ -924,6 +930,15 @@ function setupEventListeners() {
   els.modalCopyLogBtn.addEventListener('click', () => {
     navigator.clipboard.writeText(logHistory.join('\n'));
     alert('Log disalin ke clipboard.');
+  });
+
+  // Terminal Tab Switching
+  document.querySelectorAll('.terminal-tab').forEach((tabBtn) => {
+    tabBtn.addEventListener('click', (e) => {
+      document.querySelectorAll('.terminal-tab').forEach(t => t.classList.remove('active'));
+      const clicked = e.currentTarget as HTMLElement;
+      clicked.classList.add('active');
+    });
   });
 
   // Preflight
@@ -940,6 +955,12 @@ function setupEventListeners() {
 
   els.closePreflightModal.addEventListener('click', () => {
     els.preflightModal.style.display = 'none';
+  });
+
+  els.preflightModal.addEventListener('click', (e) => {
+    if (e.target === els.preflightModal) {
+      els.preflightModal.style.display = 'none';
+    }
   });
 }
 
