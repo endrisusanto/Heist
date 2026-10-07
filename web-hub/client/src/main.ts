@@ -612,12 +612,13 @@ function finishCurrentRun(status: 'FINISHED' | 'CANCELLED') {
   const elapsed = activeRunStartTime ? Math.floor((Date.now() - activeRunStartTime) / 1000) : 0;
   const tools = [...activeRunTools];
   const devices = [...activeRunDevices];
-  const nodeId = activeRunNodeId;
+  const firstDev = devices[0] || 'device';
+  const pda = getDevicePda(firstDev);
 
   // Add to History
   const historyItem: HistoryItem = {
     id: activeRunId || `run-${Date.now()}`,
-    nodeId,
+    nodeId: activeRunNodeId,
     mode: tools.map(t => t.toUpperCase()).join(', '),
     devices,
     runtimeSecs: elapsed,
@@ -625,7 +626,7 @@ function finishCurrentRun(status: 'FINISHED' | 'CANCELLED') {
     failed: 0,
     total: devices.length * tools.length,
     status,
-    archiveName: `ATM_${devices[0] || 'device'}_results.zip`,
+    archiveName: `ATM_${pda}.zip`,
     timestamp: Date.now()
   };
 
@@ -660,13 +661,37 @@ function finishCurrentRun(status: 'FINISHED' | 'CANCELLED') {
   renderAll();
 }
 
+function getDevicePda(serial: string): string {
+  for (const node of Object.values(fleet.nodes)) {
+    const dev = node.devices.find((d) => d.serial === serial);
+    if (dev && dev.build && dev.build !== '-' && dev.build !== 'UNKNOWN') {
+      return dev.build;
+    }
+  }
+  return serial;
+}
+
+function getDeviceModel(serial: string): string {
+  for (const node of Object.values(fleet.nodes)) {
+    const dev = node.devices.find((d) => d.serial === serial);
+    if (dev && dev.model && dev.model !== '-' && dev.model !== 'UNKNOWN') {
+      return dev.model;
+    }
+  }
+  return 'SM-A055F';
+}
+
 // Real Download Trigger Function
-(window as any).downloadFile = function(fileName: string, tool?: string, serial?: string, nodeId?: string) {
+(window as any).downloadFile = function(fileName: string, tool?: string, serial?: string, nodeId?: string, pda?: string, model?: string) {
+  const effectivePda = pda || (serial ? getDevicePda(serial) : '');
+  const effectiveModel = model || (serial ? getDeviceModel(serial) : '');
   const params = new URLSearchParams({
     file: fileName,
     ...(tool ? { tool } : {}),
     ...(serial ? { serial } : {}),
     ...(nodeId ? { nodeId } : {}),
+    ...(effectivePda ? { pda: effectivePda } : {}),
+    ...(effectiveModel ? { model: effectiveModel } : {}),
   });
   const url = `/api/download?${params.toString()}`;
   const link = document.createElement('a');
@@ -694,8 +719,11 @@ function setToolRowStatus(tool: string, status: 'STANDBY' | 'RUNNING' | 'PASSED'
   if (resEl) {
     if (status === 'PASSED') {
       const devSerial = activeRunDevices[0] || 'device';
+      const pda = getDevicePda(devSerial);
+      const toolUpper = tool.toLowerCase() === 'getprop' ? 'Getprop' : tool.toUpperCase();
+      const zipName = `${toolUpper}_${pda}.zip`;
       resEl.innerHTML = `
-        <button class="btn-download-sm" onclick="window.downloadFile('${tool}_result.txt', '${tool}', '${devSerial}')">Download</button>
+        <button class="btn-download-sm" onclick="window.downloadFile('${zipName}', '${tool}', '${devSerial}', '${activeRunNodeId}', '${pda}')">Download</button>
         <span class="badge-res pass">Pass 1</span>
       `;
     } else if (status === 'STANDBY') {
@@ -770,7 +798,7 @@ function renderHistory() {
         <td>
           ${
             isFinished
-              ? `<a href="#" class="archive-pill-link" onclick="window.downloadFile('${item.archiveName}', undefined, '${item.devices[0] || 'device'}', '${item.nodeId}'); return false;">${item.archiveName}</a>`
+              ? `<a href="#" class="archive-pill-link" onclick="window.downloadFile('${item.archiveName}', 'all', '${item.devices[0] || 'device'}', '${item.nodeId}'); return false;">${item.archiveName}</a>`
               : `<span style="color: var(--text-muted); font-size: 10.5px;">No Zip</span>`
           }
         </td>
