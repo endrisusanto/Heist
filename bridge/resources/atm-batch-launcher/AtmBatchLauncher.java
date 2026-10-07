@@ -1090,7 +1090,7 @@ public class AtmBatchLauncher {
                 for (Path apk : apks) {
                     if (cliCancelRequested) break;
                     log.accept("[CTSV] Installing " + apk.getFileName() + "...");
-                    CommandResult instRes = staticRunCommand(Arrays.asList(cliAdbPath, "-s", device.serial, "install", "-r", "-d", "-g", apk.toString()), ROOT, null, Duration.ofMinutes(2));
+                    CommandResult instRes = staticRunCommand(Arrays.asList(cliAdbPath, "-s", device.serial, "install", "-r", "-d", "-g", "-t", apk.toString()), ROOT, null, Duration.ofMinutes(2));
                     String instOut = instRes.output.trim();
                     if (!instOut.isEmpty()) log.accept("[CTSV] " + instOut);
                 }
@@ -1099,14 +1099,26 @@ public class AtmBatchLauncher {
             // 5. Configure Device Admin & Permissions
             staticRunCommand(Arrays.asList(cliAdbPath, "-s", device.serial, "shell", "dpm", "set-device-owner", "com.android.cts.emptydeviceowner/.EmptyDeviceAdminReceiver"), ROOT, null, Duration.ofSeconds(10));
             staticRunCommand(Arrays.asList(cliAdbPath, "-s", device.serial, "shell", "pm", "grant", "com.android.cts.verifier", "android.permission.POST_NOTIFICATIONS"), ROOT, null, Duration.ofSeconds(5));
+            staticRunCommand(Arrays.asList(cliAdbPath, "-s", device.serial, "shell", "pm", "grant", "com.example.autoctsver", "android.permission.POST_NOTIFICATIONS"), ROOT, null, Duration.ofSeconds(5));
             staticRunCommand(Arrays.asList(cliAdbPath, "-s", device.serial, "shell", "appops", "set", "com.android.cts.verifier", "MANAGE_EXTERNAL_STORAGE", "allow"), ROOT, null, Duration.ofSeconds(5));
 
-            // 6. Run Instrumentation with live streaming
+            // 6. Resolve Runner & Run Instrumentation with live streaming
             if (!cliCancelRequested) {
-                log.accept("[CTSV] Running am instrument AutoCtsVerifier...");
+                String runner = "com.example.autoctsver.test/androidx.test.runner.AndroidJUnitRunner";
+                CommandResult pmInst = staticRunCommand(Arrays.asList(cliAdbPath, "-s", device.serial, "shell", "pm", "list", "instrumentation"), ROOT, null, Duration.ofSeconds(10));
+                for (String line : pmInst.output.split("\\R")) {
+                    String t = line.trim();
+                    if (t.startsWith("instrumentation:") && (t.contains("autoctsver") || t.contains("cts.verifier.auto"))) {
+                        String part = t.substring("instrumentation:".length()).split("\\s+")[0].trim();
+                        if (!part.isEmpty()) {
+                            runner = part;
+                            break;
+                        }
+                    }
+                }
+                log.accept("[CTSV] Running am instrument: " + runner);
                 List<String> instCmd = Arrays.asList(
-                    cliAdbPath, "-s", device.serial, "shell", "am", "instrument", "-w", "-r",
-                    "com.android.cts.verifier.auto.test/androidx.test.runner.AndroidJUnitRunner"
+                    cliAdbPath, "-s", device.serial, "shell", "am", "instrument", "-w", "-r", runner
                 );
                 ProcessOutcome instOutcome = cliRunLoggedProcess(instCmd, ROOT, env, logFile, Duration.ofMinutes(15));
                 exitCode = instOutcome.exitCode;
