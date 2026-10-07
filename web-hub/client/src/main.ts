@@ -50,6 +50,7 @@ interface DeviceWorkflow {
   nodeId: string;
   model: string;
   pda: string;
+  android?: string;
   buildType: string;
   tools: string[];
   toolStatus: Record<
@@ -416,7 +417,7 @@ function renderStandbyDevices() {
     tableHtml += `
       <tr data-serial="${device.serial}" data-node="${nodeId}" class="${isBusy ? 'row-busy' : ''}">
         <td style="text-align: center;">
-          <input type="checkbox" class="standby-dev-check" data-serial="${device.serial}" data-node="${nodeId}" data-model="${device.model || 'Unknown'}" data-pda="${device.build || '-'}" data-type="${device.build_type || 'user'}" ${isChecked ? 'checked' : ''} ${isBusy ? 'disabled' : ''} title="${isBusy ? 'Perangkat sedang menjalankan pengujian' : 'Pilih perangkat'}" />
+          <input type="checkbox" class="standby-dev-check" data-serial="${device.serial}" data-node="${nodeId}" data-model="${device.model || 'Unknown'}" data-pda="${device.build || '-'}" data-android="${device.android || ''}" data-type="${device.build_type || 'user'}" ${isChecked ? 'checked' : ''} ${isBusy ? 'disabled' : ''} title="${isBusy ? 'Perangkat sedang menjalankan pengujian' : 'Pilih perangkat'}" />
         </td>
         <td>
           <span class="pill-pc-id">${nodeId}</span>
@@ -738,7 +739,7 @@ function renderWorkflows() {
       const activeElapsed = isRunning && wf.run ? Math.max(0, Math.floor((Date.now() - (wf.run.startedAt - clockSkew)) / 1000)) : 0;
       const activeTimeStr = formatTimeDigital(activeElapsed);
       const pda = wf.pda || getDevicePda(wf.serial);
-      const rawAndroid = getDeviceAndroid(wf.serial);
+      const rawAndroid = wf.android || getDeviceAndroid(wf.serial);
       const androidVer = rawAndroid ? rawAndroid.replace(/^Android\s*/i, '').trim() : '';
 
       let rowsHtml = '';
@@ -892,7 +893,7 @@ function renderWorkflows() {
       const chipsEl = card.querySelector<HTMLElement>('.card-meta-chips');
       if (chipsEl) {
         const pda = wf.pda || getDevicePda(wf.serial);
-        const rawAndroid = getDeviceAndroid(wf.serial);
+        const rawAndroid = wf.android || getDeviceAndroid(wf.serial);
         const androidVer = rawAndroid ? rawAndroid.replace(/^Android\s*/i, '').trim() : '';
         const chipsHtml = `
           <span class="pill-pc-id">${escapeHtml(wf.nodeId || 'Node')}</span>
@@ -1066,6 +1067,9 @@ function tickAllRuntimes() {
 }
 
 function getDeviceAndroid(serial: string): string {
+  if (workflows[serial]?.android) {
+    return workflows[serial].android!;
+  }
   for (const node of Object.values(fleet.nodes)) {
     const dev = node.devices.find((d) => d.serial === serial);
     if (dev && dev.android && dev.android !== '-' && dev.android !== 'UNKNOWN' && dev.android.trim() !== '') {
@@ -1431,7 +1435,7 @@ function setupEventListeners() {
   els.addToWorkflowBtn.addEventListener('click', () => {
     const devices = Array.from(els.standbyTableBody.querySelectorAll('.standby-dev-check:checked')).map((cb) => {
       const d = (cb as HTMLInputElement).dataset;
-      return { serial: d.serial, nodeId: d.node, model: d.model, pda: d.pda, buildType: d.type };
+      return { serial: d.serial, nodeId: d.node, model: d.model, pda: d.pda, android: d.android, buildType: d.type };
     });
     selectedStandbySerials.clear();
     scrollToWorkflowOnAdd = true;

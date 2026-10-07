@@ -125,6 +125,7 @@ interface DeviceWorkflow {
   nodeId: string;
   model: string;
   pda: string;
+  android?: string;
   buildType: string;
   tools: string[];
   toolStatus: Record<string, ToolRow>;
@@ -903,17 +904,22 @@ function handleAppIntent(type: string, payload: any, ui: WebSocket): boolean {
       broadcastApp();
       return true;
     case 'WORKFLOW_ADD': {
-      const busy = new Set(getFleetPayload().busyDevices);
+      const fleetPayload = getFleetPayload();
+      const busy = new Set(fleetPayload.busyDevices);
+      const fleetDevs = Object.values(fleetState.nodes).flatMap((n) => n.devices || []);
       for (const d of payload.devices || []) {
         const s = str(d.serial);
         if (busy.has(s) || app.workflows[s]) continue;
         const ctsvXmlSub = getCtsvSubtestResultsFromXml(str(d.model), str(d.pda));
         const sdtRes = getSdtResultFromLocal(str(d.model), str(d.pda));
+        const foundDev = fleetDevs.find((x) => x.serial === s);
+        const androidVer = str(d.android) || (foundDev?.android && foundDev.android !== '-' ? foundDev.android : '');
         app.workflows[s] = {
           serial: s,
           nodeId: str(d.nodeId),
           model: str(d.model),
           pda: str(d.pda),
+          android: androidVer,
           buildType: str(d.buildType),
           tools: ['ctsv', 'getprop', 'bvt', 'svt', 'sdt'],
           toolStatus: {
