@@ -32,22 +32,18 @@
 
         <div class="header-right-stats">
           <div class="stat-pill-tag">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
             <span>Nodes: <strong id="statNodesCount">0</strong></span>
           </div>
 
           <div class="stat-pill-tag">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>
             <span>Devices: <strong id="statDevicesCount">0</strong></span>
           </div>
 
           <div class="stat-pill-tag">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
             <span>Jobs: <strong id="statJobsCount">0</strong></span>
           </div>
 
           <button id="preflightBtn" class="stat-pill-btn" title="Run Preflight Diagnostics">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
             <span>Preflight</span>
             <span class="pill-dot red"></span>
           </button>
@@ -94,12 +90,11 @@
             <div class="card-header-left">
               <svg class="accordion-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
               <h2 class="card-heading">ATM Workflow</h2>
-              <span class="model-badge-tag" id="workflowModelTag">FP448</span>
+              <div id="workflowModelChipsWrap" class="workflow-models-row"></div>
             </div>
 
             <div class="card-header-right" onclick="event.stopPropagation()">
-              <span class="unit-count-pill" id="workflowUnitCount">0/0 Unit</span>
-              <button id="startAutomationBtn" class="btn btn-green">
+              <button id="startAutomationBtn" class="btn btn-blue">
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
                 <span>Jalankan Automasi</span>
               </button>
@@ -107,8 +102,8 @@
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/></svg>
                 <span>Cancel</span>
               </button>
-              <button id="deleteWorkflowBtn" class="btn-icon-danger" title="Hapus Workflow">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+              <button id="deleteWorkflowBtn" class="btn-icon-danger" title="Reset Workflow">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
               </button>
             </div>
           </div>
@@ -252,22 +247,6 @@
               </div>
             </div>
 
-            <!-- Sub-Section 3: RESULTS (0 ZIP) -->
-            <div class="sub-accordion-box" id="subResultsBox">
-              <div class="sub-accordion-header" data-toggle-sub="subResultsBox">
-                <div class="sub-header-left">
-                  <svg class="accordion-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
-                  <span class="sub-heading-text" id="workflowResultsHeaderTitle">RESULTS (0 ZIP)</span>
-                </div>
-              </div>
-
-              <div class="sub-accordion-content">
-                <div id="workflowResultsList" class="results-archives-list">
-                  <div class="empty-sub-placeholder">Belum ada file zip hasil test yang siap diunduh/ditemukan.</div>
-                </div>
-              </div>
-            </div>
-
           </div>
         </div>
 
@@ -336,8 +315,8 @@
             </div>
 
             <div class="card-header-right" onclick="event.stopPropagation()">
-              <button id="clearAllHistoryBtn" class="btn-icon-danger" title="Clear History">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+              <button id="clearAllHistoryBtn" class="btn-icon-danger" title="Reset History">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
               </button>
             </div>
           </div>

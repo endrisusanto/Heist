@@ -85,8 +85,7 @@ const els = {
 
   // Workflow
   workflowCard: document.getElementById('workflowCard') as HTMLElement,
-  workflowModelTag: document.getElementById('workflowModelTag') as HTMLElement,
-  workflowUnitCount: document.getElementById('workflowUnitCount') as HTMLElement,
+  workflowModelChipsWrap: document.getElementById('workflowModelChipsWrap') as HTMLElement,
   startAutomationBtn: document.getElementById('startAutomationBtn') as HTMLButtonElement,
   cancelAutomationBtn: document.getElementById('cancelAutomationBtn') as HTMLButtonElement,
   deleteWorkflowBtn: document.getElementById('deleteWorkflowBtn') as HTMLButtonElement,
@@ -95,8 +94,6 @@ const els = {
   workflowDevicesHeaderTitle: document.getElementById('workflowDevicesHeaderTitle') as HTMLElement,
   selectAllWorkflowDevsBtn: document.getElementById('selectAllWorkflowDevsBtn') as HTMLButtonElement,
   workflowDevicesList: document.getElementById('workflowDevicesList') as HTMLElement,
-  workflowResultsHeaderTitle: document.getElementById('workflowResultsHeaderTitle') as HTMLElement,
-  workflowResultsList: document.getElementById('workflowResultsList') as HTMLElement,
 
   // Standby
   standbyCard: document.getElementById('standbyCard') as HTMLElement,
@@ -433,7 +430,7 @@ function renderWorkflow() {
   // Initial state / Empty state: Hide the entire ATM Workflow card
   if (count === 0) {
     els.workflowCard.style.display = 'none';
-    els.workflowUnitCount.textContent = `0/0 Unit`;
+    if (els.workflowModelChipsWrap) els.workflowModelChipsWrap.innerHTML = '';
     els.workflowDevicesHeaderTitle.textContent = `DEVICES (0 Unit)`;
     els.workflowDevicesList.innerHTML = `<div class="empty-sub-placeholder">Tidak ada perangkat aktif di workflow ini. Centang perangkat di tabel Standby dan klik [Add to Workflow].</div>`;
     els.startAutomationBtn.disabled = true;
@@ -442,19 +439,32 @@ function renderWorkflow() {
 
   // Show ATM Workflow card when devices are present
   els.workflowCard.style.display = 'block';
-  els.workflowUnitCount.textContent = `${count}/${count} Unit`;
 
-  const models = Array.from(new Set(Array.from(workflowDevices.values()).map((d) => d.model || 'Unknown')));
-  els.workflowModelTag.textContent = models.length > 0 ? models.join(', ') : 'FP448';
+  // Render individual model chips with counts
+  const modelCounts = new Map<string, number>();
+  for (const dev of workflowDevices.values()) {
+    const m = dev.model || 'Unknown';
+    modelCounts.set(m, (modelCounts.get(m) || 0) + 1);
+  }
+  let modelChipsHtml = '';
+  for (const [m, c] of modelCounts.entries()) {
+    modelChipsHtml += `<span class="model-badge-tag">${m} <span class="badge-inner-count">${c}</span></span>`;
+  }
+  if (els.workflowModelChipsWrap) {
+    els.workflowModelChipsWrap.innerHTML = modelChipsHtml;
+  }
 
-  // Render Workflow Devices List
+  // Render Workflow Devices List (Nested chip-inside-chip)
   els.workflowDevicesHeaderTitle.textContent = `DEVICES (${count} Unit)`;
   let devChipsHtml = '';
   for (const [serial, dev] of workflowDevices.entries()) {
     devChipsHtml += `
-      <div class="workflow-dev-chip">
-        <span>${dev.nodeId} / <strong>${dev.model}</strong> (${serial})</span>
-        <button class="btn-remove-dev-chip" data-remove-serial="${serial}" title="Remove">&times;</button>
+      <div class="nested-parent-chip">
+        <span class="nested-inner-chip pc-id">${dev.nodeId || 'Node'}</span>
+        <span class="nested-inner-chip model">${dev.model || 'Unknown'}</span>
+        <span class="nested-inner-chip serial">${serial}</span>
+        <span class="nested-inner-chip pda">${dev.pda || '-'}</span>
+        <button class="btn-nested-remove" data-remove-serial="${serial}" title="Hapus dari workflow">&times;</button>
       </div>
     `;
   }
@@ -509,8 +519,10 @@ function startAutomation() {
 
   activeRunNodeId = Array.from(nodeBatches.keys())[0] || 'syncmaster';
 
-  // Update UI to running state
-  els.startAutomationBtn.style.display = 'none';
+  // Update UI to running state (Outline with animated progress bar)
+  els.startAutomationBtn.classList.add('running');
+  els.startAutomationBtn.disabled = true;
+  els.startAutomationBtn.innerHTML = `<span>Menjalankan Automasi...</span>`;
   els.cancelAutomationBtn.style.display = 'inline-flex';
   els.terminalActivePulse.style.display = 'inline-block';
 
@@ -613,28 +625,17 @@ function finishCurrentRun(status: 'FINISHED' | 'CANCELLED') {
     );
   });
 
-  // Populate Workflow Results Sub-Section
-  if (status === 'FINISHED' && devices.length > 0) {
-    const archives = devices.map((d) => `ATM_${d}_results.zip`);
-    els.workflowResultsHeaderTitle.textContent = `RESULTS (${archives.length} ZIP)`;
-    els.workflowResultsList.innerHTML = archives
-      .map(
-        (a, idx) => `
-      <div style="margin-bottom: 6px;">
-        <a href="#" class="archive-pill-link" onclick="window.downloadFile('${a}', undefined, '${devices[idx] || devices[0]}', '${nodeId}'); return false;">
-          ${a}
-        </a>
-      </div>
-    `
-      )
-      .join('');
-  }
-
   // Reset running state
   activeRunId = null;
   activeRunStartTime = null;
   activeRunDevices = [];
 
+  els.startAutomationBtn.classList.remove('running');
+  els.startAutomationBtn.disabled = false;
+  els.startAutomationBtn.innerHTML = `
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+    <span>Jalankan Automasi</span>
+  `;
   els.startAutomationBtn.style.display = 'inline-flex';
   els.cancelAutomationBtn.style.display = 'none';
   els.modalRunStatusBadge.textContent = `[${status}]`;
