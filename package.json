@@ -1,6 +1,6 @@
 {
   "name": "heist-monorepo",
-  "version": "1.0.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Heist - Centralized Android Test Automation Hub & System Tray Fleet Bridge",
   "workspaces": [
