@@ -928,9 +928,19 @@ input:checked + .switch-slider:before {
   color: #1e40af;
 }
 
+[data-theme="dark"] .type-pill.user {
+  background: rgba(59, 130, 246, 0.2);
+  color: #93c5fd;
+}
+
 .type-pill.userdebug {
   background: #fef3c7;
   color: #92400e;
+}
+
+[data-theme="dark"] .type-pill.userdebug {
+  background: rgba(245, 158, 11, 0.2);
+  color: #fcd34d;
 }
 
 .pda-subtext {
