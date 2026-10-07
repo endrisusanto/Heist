@@ -1,215 +1,426 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="light">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <link rel="icon" type="image/png" href="/favicon.png" />
-    <title>Heist Hub - Automated Android Fleet Orchestration Engine</title>
+    <title>ATM GBA Hub - Automated Android Test Suite Orchestration</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="/src/styles.css" />
   </head>
   <body>
-    <div id="app" class="app-shell">
-      <!-- Topbar Header -->
-      <header class="app-topbar">
-        <div class="topbar-brand">
+    <div id="app" class="app-layout">
+      <!-- 1. Top Bar Header -->
+      <header class="hub-header">
+        <div class="header-brand">
           <div class="brand-avatar">
-            <img src="/logo.png" alt="Heist Logo" class="brand-img" />
+            <img src="/logo.png" alt="Heist Logo" class="brand-logo-img" />
           </div>
-          <div class="brand-meta">
-            <div class="brand-heading">
-              <span class="brand-name">HEIST</span>
-              <span class="brand-hub-tag">HUB</span>
-            </div>
-            <span class="brand-desc">Android Fleet Orchestration</span>
+          <div class="brand-text">
+            <h1 class="brand-title">ATM GBA Hub</h1>
+            <p class="brand-subtitle">Orchestration Android Test Suite Automation</p>
           </div>
         </div>
 
-        <div class="topbar-stats">
-          <div class="stat-badge">
-            <span class="stat-dot" id="hubStatusDot"></span>
-            <span class="stat-label" id="hubStatusText">Connecting</span>
+        <div class="header-right-stats">
+          <div class="stat-pill-tag">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+            <span>Nodes: <strong id="statNodesCount">0</strong></span>
           </div>
-          <div class="stat-pill">
-            <span class="stat-k">Nodes</span>
-            <span class="stat-v" id="metricNodes">0</span>
-          </div>
-          <div class="stat-pill">
-            <span class="stat-k">Devices</span>
-            <span class="stat-v" id="metricDevices">0</span>
-          </div>
-          <div class="stat-pill" id="metricRunsContainer">
-            <span class="stat-k">Runs</span>
-            <span class="stat-v highlight" id="metricRuns">0</span>
-          </div>
-        </div>
 
-        <div class="topbar-actions">
-          <button id="preflightAllBtn" class="btn btn-ghost btn-icon-sm" title="Preflight Diagnostics">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
-            <span class="btn-text">Preflight</span>
+          <div class="stat-pill-tag">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>
+            <span>Devices: <strong id="statDevicesCount">0</strong></span>
+          </div>
+
+          <div class="stat-pill-tag">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            <span>Jobs: <strong id="statJobsCount">0</strong></span>
+          </div>
+
+          <button id="preflightBtn" class="stat-pill-btn" title="Run Preflight Diagnostics">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+            <span>Preflight</span>
+            <span class="pill-dot red"></span>
           </button>
-          <button id="refreshBtn" class="btn btn-ghost btn-icon-sm" title="Refresh Fleet State">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+
+          <button id="themeToggleBtn" class="icon-circle-btn" title="Toggle Light/Dark Theme">
+            <svg class="theme-icon-sun" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+            <svg class="theme-icon-moon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
           </button>
         </div>
       </header>
 
-      <!-- Mobile Navigation Segmented Switcher (Visible on <= 880px) -->
-      <nav class="mobile-tabbar" id="mobileTabBar">
-        <button class="tab-btn active" data-tab="fleet">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>
-          <span>Fleet Devices</span>
-          <span class="tab-count-badge" id="mobileDevCount">0</span>
-        </button>
-        <button class="tab-btn" data-tab="runner">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-          <span>Batch Runner</span>
-          <span class="tab-dot" id="mobileRunIndicator"></span>
-        </button>
-        <button class="tab-btn" data-tab="logs">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
-          <span>Live Logs</span>
-        </button>
-      </nav>
+      <!-- 2. Sub-Header Filter Bar -->
+      <section class="hub-filter-bar">
+        <div class="search-input-wrap">
+          <svg class="search-svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input type="text" id="globalSearchInput" placeholder="Cari serial, model, PC ID..." />
+          <button id="clearSearchBtn" class="btn-clear-search" style="display:none;">&times;</button>
+        </div>
 
-      <!-- Main Dual Pane View -->
-      <main class="app-content">
-        <!-- Left Section: Fleet Nodes & Devices -->
-        <section class="section-pane pane-fleet" id="paneFleet">
-          <div class="pane-toolbar">
-            <div class="toolbar-title-group">
-              <h2 class="pane-heading">Connected Fleet</h2>
-              <span class="selection-pill" id="selectionPill">0 Selected</span>
+        <div class="filter-controls-group">
+          <select id="nodeFilterSelect" class="custom-select">
+            <option value="all">Semua PC Node</option>
+          </select>
+
+          <select id="deviceModeSelect" class="custom-select">
+            <option value="all">Device Mode</option>
+            <option value="user">USER Only</option>
+            <option value="userdebug">USERDEBUG Only</option>
+          </select>
+
+          <button id="openTerminalLogsBtn" class="btn-terminal-toggle">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+            <span>&gt;_ Terminal Logs</span>
+            <span class="active-pulse-dot" id="terminalActivePulse" style="display:none;"></span>
+          </button>
+        </div>
+      </section>
+
+      <!-- 3. Main Dashboard Body -->
+      <main class="hub-main-content">
+        <!-- SECTION A: ATM WORKFLOW -->
+        <div class="dashboard-card" id="workflowCard">
+          <div class="card-main-header" data-toggle="workflow">
+            <div class="card-header-left">
+              <svg class="accordion-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+              <h2 class="card-heading">ATM Workflow</h2>
+              <span class="model-badge-tag" id="workflowModelTag">FP448</span>
             </div>
-            <div class="toolbar-quick-actions">
-              <button id="selectAllBtn" class="btn btn-xs btn-outline">Select All</button>
-              <button id="deselectAllBtn" class="btn btn-xs btn-ghost">Deselect</button>
+
+            <div class="card-header-right" onclick="event.stopPropagation()">
+              <span class="unit-count-pill" id="workflowUnitCount">0/0 Unit</span>
+              <button id="startAutomationBtn" class="btn btn-green">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                <span>Jalankan Automasi</span>
+              </button>
+              <button id="cancelAutomationBtn" class="btn btn-danger" style="display:none;">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/></svg>
+                <span>Cancel</span>
+              </button>
+              <button id="deleteWorkflowBtn" class="btn-icon-danger" title="Hapus Workflow">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+              </button>
             </div>
           </div>
 
-          <!-- Fleet Search Filter -->
-          <div class="search-bar-wrap">
-            <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-            <input type="text" id="deviceSearchInput" placeholder="Filter devices by model, serial, CSC, Android..." />
-            <button id="clearSearchBtn" class="clear-search-btn" style="display:none;">&times;</button>
-          </div>
-
-          <!-- Nodes Accordion Container -->
-          <div class="fleet-accordion-list" id="fleetAccordionList">
-            <div class="empty-fleet-card" id="emptyFleetCard">
-              <div class="empty-icon-wrap">
-                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
-              </div>
-              <h3>No PC Nodes Online</h3>
-              <p>Launch <strong>Heist Bridge</strong> on test nodes to automatically connect ADB devices.</p>
-            </div>
-          </div>
-        </section>
-
-        <!-- Right Section: Batch Control & Real-time Console -->
-        <section class="section-pane pane-execution" id="paneExecution">
-          <!-- Batch Runner Card -->
-          <div class="batch-suite-card" id="paneRunner">
-            <div class="card-header-row">
-              <div class="header-tag-group">
-                <span class="suite-title">Test Suite Orchestrator</span>
-                <span class="status-indicator-tag idle" id="batchStatusTag">IDLE</span>
-              </div>
-              <div class="active-devices-summary" id="activeDevicesSummary">
-                0 devices ready
-              </div>
-            </div>
-
-            <!-- Tool Selection Pills (Legacy Suite from ATM) -->
-            <div class="tool-selection-box">
-              <span class="group-label">Automation Tools</span>
-              <div class="tool-chip-grid" id="toolChipGrid">
-                <label class="tool-toggle-chip active" title="Pengumpulan Informasi Build Property Perangkat">
-                  <input type="checkbox" value="getprop" checked />
-                  <span class="chip-label">GetpropSnapshot</span>
-                </label>
-                <label class="tool-toggle-chip" title="Pengujian Informasi Dasar & Kompatibilitas BVT">
-                  <input type="checkbox" value="bvt" />
-                  <span class="chip-label">BasicInfoTests (BVT)</span>
-                </label>
-                <label class="tool-toggle-chip" title="Validasi Preload Aplikasi & Komponen SVT">
-                  <input type="checkbox" value="svt" />
-                  <span class="chip-label">SVTPreloadValidation</span>
-                </label>
-                <label class="tool-toggle-chip" title="Eksekusi Paket Pengujian Tersembunyi SDT">
-                  <input type="checkbox" value="sdt" />
-                  <span class="chip-label">SDTDeviceTest</span>
-                </label>
-              </div>
-            </div>
-
-            <!-- Runner Options & Execution Controls -->
-            <div class="runner-controls-row">
-              <div class="runner-option-group">
-                <div class="input-stepper-wrap">
-                  <label for="concurrencyInput">Concurrency / Node:</label>
-                  <input type="number" id="concurrencyInput" min="1" max="16" value="1" />
+          <div class="card-main-body" id="workflowBody">
+            <!-- Sub-Section 1: HASIL PENGUJIAN -->
+            <div class="sub-accordion-box expanded" id="subHasilPengujian">
+              <div class="sub-accordion-header" data-toggle-sub="subHasilPengujian">
+                <div class="sub-header-left">
+                  <svg class="accordion-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+                  <span class="sub-heading-text">HASIL PENGUJIAN</span>
                 </div>
-
-                <label class="custom-checkbox-wrap">
-                  <input type="checkbox" id="updateToolsCheck" />
-                  <span class="checkbox-ui"></span>
-                  <span class="checkbox-text">Update Agent Tools</span>
-                </label>
+                <div class="sub-header-right" onclick="event.stopPropagation()">
+                  <button id="uncheckAllToolsBtn" class="sub-action-link">Uncheck</button>
+                </div>
               </div>
 
-              <div class="action-btn-group">
-                <button id="runBatchBtn" class="btn btn-heist-primary" disabled>
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-                  <span>Start Batch Run</span>
-                </button>
-                <button id="cancelBatchBtn" class="btn btn-heist-danger" disabled>
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/></svg>
-                  <span>Cancel</span>
-                </button>
+              <div class="sub-accordion-content">
+                <div class="table-responsive">
+                  <table class="workflow-table">
+                    <thead>
+                      <tr>
+                        <th style="width: 70px;">SELECT</th>
+                        <th style="width: 280px;">TESTCASE</th>
+                        <th>SUBTESTCASES</th>
+                        <th style="width: 100px;">STATUS</th>
+                        <th style="width: 100px;">TIME</th>
+                        <th style="width: 170px;">RESULTS</th>
+                      </tr>
+                    </thead>
+                    <tbody id="testcaseRows">
+                      <!-- Row 1: GetpropSnapshot -->
+                      <tr data-tool="getprop">
+                        <td>
+                          <label class="switch-toggle">
+                            <input type="checkbox" class="tool-switch" data-tool="getprop" checked />
+                            <span class="switch-slider"></span>
+                          </label>
+                        </td>
+                        <td>
+                          <div class="tc-name-bold">GetpropSnapshot</div>
+                          <div class="tc-subdesc">Pengumpulan Informasi Build Property Perangkat</div>
+                        </td>
+                        <td class="tc-subtests-col" id="subtest_getprop">-</td>
+                        <td><span class="status-pill standby" id="status_getprop">STANDBY</span></td>
+                        <td class="time-col" id="time_getprop">00:00:00</td>
+                        <td>
+                          <div class="results-cell-wrap" id="res_getprop">
+                            <button class="btn-download-sm" disabled>Download</button>
+                          </div>
+                        </td>
+                      </tr>
+
+                      <!-- Row 2: BasicInfoTests (BVT) -->
+                      <tr data-tool="bvt">
+                        <td>
+                          <label class="switch-toggle">
+                            <input type="checkbox" class="tool-switch" data-tool="bvt" checked />
+                            <span class="switch-slider"></span>
+                          </label>
+                        </td>
+                        <td>
+                          <div class="tc-name-bold">BasicInfoTests (BVT)</div>
+                          <div class="tc-subdesc">Pengujian Informasi Dasar & Kompatibilitas BVT</div>
+                        </td>
+                        <td class="tc-subtests-col" id="subtest_bvt">-</td>
+                        <td><span class="status-pill standby" id="status_bvt">STANDBY</span></td>
+                        <td class="time-col" id="time_bvt">00:00:00</td>
+                        <td>
+                          <div class="results-cell-wrap" id="res_bvt">
+                            <button class="btn-download-sm" disabled>Download</button>
+                          </div>
+                        </td>
+                      </tr>
+
+                      <!-- Row 3: SVTPreloadValidation -->
+                      <tr data-tool="svt">
+                        <td>
+                          <label class="switch-toggle">
+                            <input type="checkbox" class="tool-switch" data-tool="svt" checked />
+                            <span class="switch-slider"></span>
+                          </label>
+                        </td>
+                        <td>
+                          <div class="tc-name-bold">SVTPreloadValidation</div>
+                          <div class="tc-subdesc">Validasi Preload Aplikasi & Komponen SVT</div>
+                        </td>
+                        <td class="tc-subtests-col" id="subtest_svt">-</td>
+                        <td><span class="status-pill standby" id="status_svt">STANDBY</span></td>
+                        <td class="time-col" id="time_svt">00:00:00</td>
+                        <td>
+                          <div class="results-cell-wrap" id="res_svt">
+                            <button class="btn-download-sm" disabled>Download</button>
+                          </div>
+                        </td>
+                      </tr>
+
+                      <!-- Row 4: SDTDeviceTest -->
+                      <tr data-tool="sdt">
+                        <td>
+                          <label class="switch-toggle">
+                            <input type="checkbox" class="tool-switch" data-tool="sdt" checked />
+                            <span class="switch-slider"></span>
+                          </label>
+                        </td>
+                        <td>
+                          <div class="tc-name-bold">SDTDeviceTest</div>
+                          <div class="tc-subdesc">Eksekusi Paket Pengujian Tersembunyi SDT</div>
+                        </td>
+                        <td class="tc-subtests-col" id="subtest_sdt">-</td>
+                        <td><span class="status-pill standby" id="status_sdt">STANDBY</span></td>
+                        <td class="time-col" id="time_sdt">00:00:00</td>
+                        <td>
+                          <div class="results-cell-wrap" id="res_sdt">
+                            <button class="btn-download-sm" disabled>Download</button>
+                          </div>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
               </div>
+            </div>
+
+            <!-- Sub-Section 2: DEVICES -->
+            <div class="sub-accordion-box expanded" id="subDevicesBox">
+              <div class="sub-accordion-header" data-toggle-sub="subDevicesBox">
+                <div class="sub-header-left">
+                  <svg class="accordion-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+                  <span class="sub-heading-text" id="workflowDevicesHeaderTitle">DEVICES (0 Unit)</span>
+                </div>
+                <div class="sub-header-right" onclick="event.stopPropagation()">
+                  <button id="selectAllWorkflowDevsBtn" class="sub-action-link">Select All</button>
+                </div>
+              </div>
+
+              <div class="sub-accordion-content">
+                <div id="workflowDevicesList" class="workflow-devices-grid">
+                  <div class="empty-sub-placeholder">Tidak ada perangkat aktif/terdeteksi di workflow ini. Pilih perangkat di tabel Standby di bawah.</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Sub-Section 3: RESULTS (0 ZIP) -->
+            <div class="sub-accordion-box" id="subResultsBox">
+              <div class="sub-accordion-header" data-toggle-sub="subResultsBox">
+                <div class="sub-header-left">
+                  <svg class="accordion-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+                  <span class="sub-heading-text" id="workflowResultsHeaderTitle">RESULTS (0 ZIP)</span>
+                </div>
+              </div>
+
+              <div class="sub-accordion-content">
+                <div id="workflowResultsList" class="results-archives-list">
+                  <div class="empty-sub-placeholder">Belum ada file zip hasil test yang siap diunduh/ditemukan.</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Bottom Add Workflow button -->
+            <div class="add-workflow-btn-wrap">
+              <button id="addWorkflowBtn" class="btn-add-workflow">
+                <span>+ Tambah Workflow</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- SECTION B: PERANGKAT STANDBY -->
+        <div class="dashboard-card" id="standbyCard">
+          <div class="card-main-header" data-toggle="standby">
+            <div class="card-header-left">
+              <svg class="accordion-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+              <h2 class="card-heading">PERANGKAT STANDBY</h2>
+              <span class="badge-count-green" id="standbyCountBadge">0</span>
+            </div>
+
+            <div class="card-header-right" onclick="event.stopPropagation()">
+              <button id="resetBusyBtn" class="btn btn-outline-sm">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+                <span>Reset Busy</span>
+              </button>
+              <button id="addToWorkflowBtn" class="btn btn-green-sm" disabled>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                <span>Add to Workflow</span>
+              </button>
             </div>
           </div>
 
-          <!-- Console & Stream Log Viewer -->
-          <div class="console-card" id="paneLogs">
-            <div class="console-topbar">
-              <div class="console-heading">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--heist-red)" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
-                <span class="console-title">Fleet Live Terminal</span>
-                <span class="console-line-badge" id="logCount">0 lines</span>
-              </div>
-
-              <div class="console-actions">
-                <input type="text" id="logFilterInput" placeholder="Filter console logs..." class="filter-input-sm" />
-                <label class="toggle-wrap-sm">
-                  <input type="checkbox" id="autoScrollCheck" checked />
-                  <span>Scroll</span>
-                </label>
-                <button id="clearLogsBtn" class="btn btn-xs btn-ghost" title="Clear console">Clear</button>
-                <button id="copyLogsBtn" class="btn btn-xs btn-outline" title="Copy console">Copy</button>
-              </div>
+          <div class="card-main-body" id="standbyBody">
+            <!-- Filter Chips Row -->
+            <div class="filter-chips-row" id="standbyFilterChips">
+              <button class="filter-chip active" data-model="ALL">
+                <span>SEMUA</span>
+                <span class="chip-count" id="chipCountAll">0</span>
+              </button>
+              <!-- Dynamic model chips inserted by JS -->
             </div>
 
-            <div class="console-output" id="consoleTerminal">
-              <div class="terminal-row sys">[Heist Hub] Connected and waiting for fleet bridges...</div>
+            <!-- Standby Devices Table -->
+            <div class="table-responsive">
+              <table class="standby-table">
+                <thead>
+                  <tr>
+                    <th style="width: 44px; text-align: center;">
+                      <input type="checkbox" id="selectAllStandbyCheck" class="custom-checkbox" />
+                    </th>
+                    <th style="width: 140px;">PC ID</th>
+                    <th style="width: 260px;">MODEL & PDA</th>
+                    <th>SERIAL NUMBER</th>
+                    <th style="width: 140px;">STATUS</th>
+                  </tr>
+                </thead>
+                <tbody id="standbyTableBody">
+                  <tr>
+                    <td colspan="5" class="empty-table-cell">Sedang memindai perangkat terhubung...</td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
           </div>
-        </section>
+        </div>
+
+        <!-- SECTION C: HISTORY -->
+        <div class="dashboard-card" id="historyCard">
+          <div class="card-main-header" data-toggle="history">
+            <div class="card-header-left">
+              <svg class="accordion-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+              <h2 class="card-heading">HISTORY</h2>
+              <span class="badge-count-green" id="historyCountBadge">0</span>
+            </div>
+
+            <div class="card-header-right" onclick="event.stopPropagation()">
+              <button id="clearAllHistoryBtn" class="btn-icon-danger" title="Clear History">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="card-main-body" id="historyBody">
+            <div class="table-responsive">
+              <table class="history-table">
+                <thead>
+                  <tr>
+                    <th style="width: 110px;">NODE PC</th>
+                    <th style="width: 180px;">MODE</th>
+                    <th style="width: 130px;">DEVICES</th>
+                    <th style="width: 100px;">RUNTIME</th>
+                    <th style="width: 70px;">PASSED</th>
+                    <th style="width: 70px;">FAILED</th>
+                    <th style="width: 70px;">TOTAL</th>
+                    <th style="width: 110px;">STATUS</th>
+                    <th>RESULT ARCHIVE</th>
+                    <th style="width: 50px; text-align: center;">AKSI</th>
+                  </tr>
+                </thead>
+                <tbody id="historyTableBody">
+                  <tr>
+                    <td colspan="10" class="empty-table-cell">Belum ada riwayat pengujian.</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
       </main>
 
-      <!-- Preflight Diagnostic Modal / BottomSheet -->
-      <div class="modal-backdrop" id="preflightModal" style="display:none;">
-        <div class="modal-container">
-          <div class="modal-header">
-            <div class="modal-title-group">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--heist-red)" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
-              <h3>Node Preflight Diagnostics</h3>
+      <!-- 4. Floating Live Terminal Modal Dialog (Screenshot 1) -->
+      <div class="terminal-modal-backdrop" id="terminalModal" style="display:none;">
+        <div class="terminal-modal-window">
+          <!-- Window Header Bar -->
+          <div class="terminal-modal-header">
+            <div class="modal-header-tagline">
+              <span class="modal-status-badge cancelled" id="modalRunStatusBadge">[CANCELLED]</span>
+              <span class="modal-node-title" id="modalNodeTitle">STS - syncmaster (09:...)</span>
+              <span class="modal-runtime-tag" id="modalRuntimeTag">0h 00m 00s</span>
             </div>
-            <button class="btn-close-modal" id="closePreflightModal">&times;</button>
+
+            <div class="modal-window-actions">
+              <button id="modalClearLogBtn" class="modal-act-btn" title="Clear Console">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+              </button>
+              <button id="modalCopyLogBtn" class="modal-act-btn" title="Copy Console">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+              </button>
+              <button id="modalCloseBtn" class="modal-act-btn close" title="Close">
+                &times;
+              </button>
+            </div>
           </div>
-          <div class="modal-body" id="preflightModalBody">
-            <div id="preflightReportsContainer"></div>
+
+          <!-- Window Tab Bar -->
+          <div class="terminal-modal-tabs" id="modalTerminalTabs">
+            <button class="terminal-tab active" data-tab="all">syncmaster</button>
+            <button class="terminal-tab" data-tab="suite">STS</button>
+            <button class="terminal-tab" data-tab="device" id="modalActiveDeviceTab">Active Device</button>
+          </div>
+
+          <!-- Window Console Viewport -->
+          <div class="terminal-modal-console" id="modalConsoleOutput">
+            <div class="term-row sys">[Hub] Central automation terminal initialized.</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 5. Preflight Modal Dialog -->
+      <div class="terminal-modal-backdrop" id="preflightModal" style="display:none;">
+        <div class="preflight-modal-window">
+          <div class="terminal-modal-header">
+            <div class="modal-header-tagline">
+              <span class="modal-node-title">Node Preflight Diagnostics</span>
+            </div>
+            <div class="modal-window-actions">
+              <button id="closePreflightModal" class="modal-act-btn close">&times;</button>
+            </div>
+          </div>
+          <div class="preflight-modal-body" id="preflightReportsContainer">
+            <div class="diag-node-block">[Preflight] Checking connected nodes...</div>
           </div>
         </div>
       </div>

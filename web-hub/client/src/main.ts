@@ -26,6 +26,104 @@ interface FleetState {
   nodes: Record<string, NodeState>;
 }
 
+interface HistoryItem {
+  id: string;
+  nodeId: string;
+  mode: string;
+  devices: string[];
+  runtimeSecs: number;
+  passed: number;
+  failed: number;
+  total: number;
+  status: 'FINISHED' | 'CANCELLED';
+  archiveName: string;
+  timestamp: number;
+}
+
+// State
+let fleet: FleetState = { nodes: {} };
+const selectedStandbySerials = new Set<string>(); // serials checked in Standby table
+const workflowDevices = new Map<string, { serial: string; nodeId: string; model: string; pda: string; buildType: string }>(); // serial -> meta
+
+let selectedModelFilter = 'ALL';
+let globalSearchQuery = '';
+let selectedNodeFilter = 'all';
+let selectedDeviceModeFilter = 'all';
+
+let activeRunId: string | null = null;
+let activeRunStartTime: number | null = null;
+let activeRunTimerInterval: any = null;
+let activeRunNodeId: string = 'syncmaster';
+let activeRunDevices: string[] = [];
+let activeRunTools: string[] = ['getprop', 'bvt', 'svt', 'sdt'];
+
+let ws: WebSocket | null = null;
+let logHistory: string[] = [];
+let historyList: HistoryItem[] = loadHistoryFromDisk();
+
+// DOM Elements
+const els = {
+  themeToggleBtn: document.getElementById('themeToggleBtn') as HTMLButtonElement,
+  statNodesCount: document.getElementById('statNodesCount') as HTMLElement,
+  statDevicesCount: document.getElementById('statDevicesCount') as HTMLElement,
+  statJobsCount: document.getElementById('statJobsCount') as HTMLElement,
+  preflightBtn: document.getElementById('preflightBtn') as HTMLButtonElement,
+
+  globalSearchInput: document.getElementById('globalSearchInput') as HTMLInputElement,
+  clearSearchBtn: document.getElementById('clearSearchBtn') as HTMLButtonElement,
+  nodeFilterSelect: document.getElementById('nodeFilterSelect') as HTMLSelectElement,
+  deviceModeSelect: document.getElementById('deviceModeSelect') as HTMLSelectElement,
+  openTerminalLogsBtn: document.getElementById('openTerminalLogsBtn') as HTMLButtonElement,
+  terminalActivePulse: document.getElementById('terminalActivePulse') as HTMLElement,
+
+  // Workflow
+  workflowCard: document.getElementById('workflowCard') as HTMLElement,
+  workflowModelTag: document.getElementById('workflowModelTag') as HTMLElement,
+  workflowUnitCount: document.getElementById('workflowUnitCount') as HTMLElement,
+  startAutomationBtn: document.getElementById('startAutomationBtn') as HTMLButtonElement,
+  cancelAutomationBtn: document.getElementById('cancelAutomationBtn') as HTMLButtonElement,
+  deleteWorkflowBtn: document.getElementById('deleteWorkflowBtn') as HTMLButtonElement,
+  uncheckAllToolsBtn: document.getElementById('uncheckAllToolsBtn') as HTMLButtonElement,
+  toolSwitches: document.querySelectorAll('.tool-switch') as NodeListOf<HTMLInputElement>,
+  workflowDevicesHeaderTitle: document.getElementById('workflowDevicesHeaderTitle') as HTMLElement,
+  selectAllWorkflowDevsBtn: document.getElementById('selectAllWorkflowDevsBtn') as HTMLButtonElement,
+  workflowDevicesList: document.getElementById('workflowDevicesList') as HTMLElement,
+  workflowResultsHeaderTitle: document.getElementById('workflowResultsHeaderTitle') as HTMLElement,
+  workflowResultsList: document.getElementById('workflowResultsList') as HTMLElement,
+  addWorkflowBtn: document.getElementById('addWorkflowBtn') as HTMLButtonElement,
+
+  // Standby
+  standbyCard: document.getElementById('standbyCard') as HTMLElement,
+  standbyCountBadge: document.getElementById('standbyCountBadge') as HTMLElement,
+  resetBusyBtn: document.getElementById('resetBusyBtn') as HTMLButtonElement,
+  addToWorkflowBtn: document.getElementById('addToWorkflowBtn') as HTMLButtonElement,
+  standbyFilterChips: document.getElementById('standbyFilterChips') as HTMLElement,
+  selectAllStandbyCheck: document.getElementById('selectAllStandbyCheck') as HTMLInputElement,
+  standbyTableBody: document.getElementById('standbyTableBody') as HTMLElement,
+
+  // History
+  historyCard: document.getElementById('historyCard') as HTMLElement,
+  historyCountBadge: document.getElementById('historyCountBadge') as HTMLElement,
+  clearAllHistoryBtn: document.getElementById('clearAllHistoryBtn') as HTMLButtonElement,
+  historyTableBody: document.getElementById('historyTableBody') as HTMLElement,
+
+  // Terminal Modal
+  terminalModal: document.getElementById('terminalModal') as HTMLElement,
+  modalRunStatusBadge: document.getElementById('modalRunStatusBadge') as HTMLElement,
+  modalNodeTitle: document.getElementById('modalNodeTitle') as HTMLElement,
+  modalRuntimeTag: document.getElementById('modalRuntimeTag') as HTMLElement,
+  modalClearLogBtn: document.getElementById('modalClearLogBtn') as HTMLButtonElement,
+  modalCopyLogBtn: document.getElementById('modalCopyLogBtn') as HTMLButtonElement,
+  modalCloseBtn: document.getElementById('modalCloseBtn') as HTMLButtonElement,
+  modalTerminalTabs: document.getElementById('modalTerminalTabs') as HTMLElement,
+  modalConsoleOutput: document.getElementById('modalConsoleOutput') as HTMLElement,
+
+  // Preflight Modal
+  preflightModal: document.getElementById('preflightModal') as HTMLElement,
+  closePreflightModal: document.getElementById('closePreflightModal') as HTMLButtonElement,
+  preflightReportsContainer: document.getElementById('preflightReportsContainer') as HTMLElement,
+};
+
 function cleanSpec(val?: string): string {
   if (!val || val === '-') return '-';
   const parts = val.split(/[,/]/).map((s) => s.trim()).filter(Boolean);
@@ -33,66 +131,36 @@ function cleanSpec(val?: string): string {
   return unique.length > 0 ? unique.join('/') : '-';
 }
 
-// State
-let fleet: FleetState = { nodes: {} };
-const selectedDevices = new Map<string, string>(); // serial -> nodeId
-const expandedNodes = new Set<string>(); // nodeIds that are expanded in accordion
-let activeRunId: string | null = null;
-let ws: WebSocket | null = null;
-let logLinesCount = 0;
-let currentMobileTab: 'fleet' | 'runner' | 'logs' = 'fleet';
-let deviceSearchQuery = '';
+function formatDuration(totalSeconds: number): string {
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  const s = totalSeconds % 60;
+  if (h > 0) {
+    return `${h}h ${m}m ${s}s`;
+  }
+  if (m > 0) {
+    return `${m}m ${s}s`;
+  }
+  return `${s}s`;
+}
 
-// DOM Elements
-const els = {
-  appContent: document.querySelector('.app-content') as HTMLElement,
-  hubStatusDot: document.getElementById('hubStatusDot') as HTMLElement,
-  hubStatusText: document.getElementById('hubStatusText') as HTMLElement,
-  metricNodes: document.getElementById('metricNodes') as HTMLElement,
-  metricDevices: document.getElementById('metricDevices') as HTMLElement,
-  metricRuns: document.getElementById('metricRuns') as HTMLElement,
-  mobileDevCount: document.getElementById('mobileDevCount') as HTMLElement,
-  mobileRunIndicator: document.getElementById('mobileRunIndicator') as HTMLElement,
-  selectionPill: document.getElementById('selectionPill') as HTMLElement,
-  selectAllBtn: document.getElementById('selectAllBtn') as HTMLButtonElement,
-  deselectAllBtn: document.getElementById('deselectAllBtn') as HTMLButtonElement,
-  deviceSearchInput: document.getElementById('deviceSearchInput') as HTMLInputElement,
-  clearSearchBtn: document.getElementById('clearSearchBtn') as HTMLButtonElement,
-  fleetAccordionList: document.getElementById('fleetAccordionList') as HTMLElement,
-  emptyFleetCard: document.getElementById('emptyFleetCard') as HTMLElement,
-  batchStatusTag: document.getElementById('batchStatusTag') as HTMLElement,
-  activeDevicesSummary: document.getElementById('activeDevicesSummary') as HTMLElement,
-  toolChipGrid: document.getElementById('toolChipGrid') as HTMLElement,
-  concurrencyInput: document.getElementById('concurrencyInput') as HTMLInputElement,
-  updateToolsCheck: document.getElementById('updateToolsCheck') as HTMLInputElement,
-  runBatchBtn: document.getElementById('runBatchBtn') as HTMLButtonElement,
-  cancelBatchBtn: document.getElementById('cancelBatchBtn') as HTMLButtonElement,
-  consoleTerminal: document.getElementById('consoleTerminal') as HTMLElement,
-  logCount: document.getElementById('logCount') as HTMLElement,
-  logFilterInput: document.getElementById('logFilterInput') as HTMLInputElement,
-  autoScrollCheck: document.getElementById('autoScrollCheck') as HTMLInputElement,
-  clearLogsBtn: document.getElementById('clearLogsBtn') as HTMLButtonElement,
-  copyLogsBtn: document.getElementById('copyLogsBtn') as HTMLButtonElement,
-  preflightAllBtn: document.getElementById('preflightAllBtn') as HTMLButtonElement,
-  refreshBtn: document.getElementById('refreshBtn') as HTMLButtonElement,
-  preflightModal: document.getElementById('preflightModal') as HTMLElement,
-  closePreflightModal: document.getElementById('closePreflightModal') as HTMLButtonElement,
-  preflightReportsContainer: document.getElementById('preflightReportsContainer') as HTMLElement,
-};
+function formatTimeDigital(totalSeconds: number): string {
+  const h = String(Math.floor(totalSeconds / 3600)).padStart(2, '0');
+  const m = String(Math.floor((totalSeconds % 3600) / 60)).padStart(2, '0');
+  const s = String(totalSeconds % 60).padStart(2, '0');
+  return `${h}:${m}:${s}`;
+}
 
+// WebSocket Connection
 function connectWS() {
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const wsUrl = `${protocol}//${window.location.host}/ws/ui`;
-
-  els.hubStatusDot.className = 'stat-dot';
-  els.hubStatusText.textContent = 'Connecting...';
+  const loc = window.location;
+  const proto = loc.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsUrl = `${proto}//${loc.host}/ws/ui`;
 
   ws = new WebSocket(wsUrl);
 
   ws.onopen = () => {
-    els.hubStatusDot.className = 'stat-dot live';
-    els.hubStatusText.textContent = 'Live';
-    appendConsole('[Heist Hub] Connected to Central Orchestration Hub', 'sys');
+    appendModalLog('[Heist Hub] Connected to Central Automation Server', 'sys');
   };
 
   ws.onmessage = (evt) => {
@@ -105,9 +173,7 @@ function connectWS() {
   };
 
   ws.onclose = () => {
-    els.hubStatusDot.className = 'stat-dot dead';
-    els.hubStatusText.textContent = 'Offline';
-    appendConsole('[Heist Hub] Connection lost. Reconnecting in 3s...', 'warn');
+    appendModalLog('[Heist Hub] Connection lost. Reconnecting in 3s...', 'warn');
     setTimeout(connectWS, 3000);
   };
 
@@ -122,31 +188,24 @@ function handleHubMessage(msg: { type: string; payload: any }) {
   switch (type) {
     case 'FLEET_STATE': {
       fleet = payload;
-      // Auto-expand all nodes initially
-      for (const nodeId of Object.keys(fleet.nodes)) {
-        if (!expandedNodes.has(nodeId)) {
-          expandedNodes.add(nodeId);
-        }
-      }
-      renderFleetAccordion();
-      updateMetrics();
+      updateNodeDropdown();
+      renderAll();
       break;
     }
 
     case 'LOG_STREAM': {
-      appendConsole(`[${payload.nodeId}][${payload.runId}] ${payload.line}`);
+      appendModalLog(`[${payload.nodeId}][${payload.runId}] ${payload.line}`);
+      parseTestcaseProgress(payload.line);
       break;
     }
 
     case 'RUN_FINISHED': {
       const isOk = payload.exit_code === 0;
-      appendConsole(
+      appendModalLog(
         `[${payload.nodeId}] Run ${payload.run_id} finished with exit code ${payload.exit_code}`,
         isOk ? 'success' : 'err'
       );
-      if (activeRunId === payload.run_id) {
-        setRunState(false);
-      }
+      finishCurrentRun(isOk ? 'FINISHED' : 'CANCELLED');
       break;
     }
 
@@ -157,263 +216,518 @@ function handleHubMessage(msg: { type: string; payload: any }) {
 
     case 'ACTION_RESPONSE': {
       const isSuccess = payload.success;
-      appendConsole(`[${payload.nodeId}] Action ${payload.action}: ${payload.message}`, isSuccess ? 'sys' : 'err');
+      appendModalLog(`[${payload.nodeId}] Action ${payload.action}: ${payload.message}`, isSuccess ? 'sys' : 'err');
       break;
     }
   }
 }
 
-function updateMetrics() {
+// Render All Components
+function renderAll() {
+  renderStats();
+  renderStandbyDevices();
+  renderWorkflow();
+  renderHistory();
+}
+
+function renderStats() {
   const nodes = Object.values(fleet.nodes);
-  const nodeCount = nodes.length;
-  let deviceCount = 0;
-  let activeRunsCount = 0;
+  let devCount = 0;
+  let jobCount = 0;
 
   for (const n of nodes) {
-    deviceCount += n.devices?.length || 0;
-    activeRunsCount += n.activeRuns?.length || 0;
+    devCount += n.devices?.length || 0;
+    jobCount += n.activeRuns?.length || 0;
   }
 
-  els.metricNodes.textContent = nodeCount.toString();
-  els.metricDevices.textContent = deviceCount.toString();
-  els.metricRuns.textContent = activeRunsCount.toString();
-  els.mobileDevCount.textContent = deviceCount.toString();
+  els.statNodesCount.textContent = nodes.length.toString();
+  els.statDevicesCount.textContent = devCount.toString();
+  els.statJobsCount.textContent = jobCount.toString();
 
-  if (activeRunsCount > 0) {
-    els.mobileRunIndicator.className = 'tab-dot active';
-    setRunState(true);
+  if (activeRunId || jobCount > 0) {
+    els.terminalActivePulse.style.display = 'inline-block';
   } else {
-    els.mobileRunIndicator.className = 'tab-dot';
-    if (activeRunId === null) {
-      setRunState(false);
-    }
+    els.terminalActivePulse.style.display = 'none';
   }
 }
 
-function renderFleetAccordion() {
+function updateNodeDropdown() {
+  const currentVal = els.nodeFilterSelect.value;
   const nodes = Object.values(fleet.nodes);
-  if (nodes.length === 0) {
-    els.fleetAccordionList.innerHTML = '';
-    els.fleetAccordionList.appendChild(els.emptyFleetCard);
-    updateSelectionUI();
+  els.nodeFilterSelect.innerHTML = '<option value="all">Semua PC Node</option>';
+  for (const n of nodes) {
+    const opt = document.createElement('option');
+    opt.value = n.nodeId;
+    opt.textContent = `${n.nodeId} (${n.os})`;
+    els.nodeFilterSelect.appendChild(opt);
+  }
+  if (Array.from(els.nodeFilterSelect.options).some(o => o.value === currentVal)) {
+    els.nodeFilterSelect.value = currentVal;
+  }
+}
+
+// Standby Devices & Filter Chips
+function getAllConnectedDevices(): Array<{ device: DeviceInfo; nodeId: string }> {
+  const list: Array<{ device: DeviceInfo; nodeId: string }> = [];
+  for (const node of Object.values(fleet.nodes)) {
+    if (selectedNodeFilter !== 'all' && node.nodeId !== selectedNodeFilter) {
+      continue;
+    }
+    for (const dev of node.devices || []) {
+      // Filter mode
+      if (selectedDeviceModeFilter === 'user' && !dev.build_type.toLowerCase().includes('user') && !dev.build.toLowerCase().includes('user')) {
+        continue;
+      }
+      if (selectedDeviceModeFilter === 'userdebug' && !dev.build_type.toLowerCase().includes('userdebug')) {
+        continue;
+      }
+      // Global search
+      if (globalSearchQuery) {
+        const hay = `${dev.model} ${dev.serial} ${dev.build} ${dev.csc} ${node.nodeId}`.toLowerCase();
+        if (!hay.includes(globalSearchQuery)) continue;
+      }
+      list.push({ device: dev, nodeId: node.nodeId });
+    }
+  }
+  return list;
+}
+
+function renderStandbyDevices() {
+  const allDevs = getAllConnectedDevices();
+  els.standbyCountBadge.textContent = allDevs.length.toString();
+
+  // 1. Calculate Model Counts for Filter Chips
+  const modelCounts = new Map<string, number>();
+  for (const { device } of allDevs) {
+    const m = (device.model || 'UNKNOWN').trim();
+    modelCounts.set(m, (modelCounts.get(m) || 0) + 1);
+  }
+
+  // Render Filter Chips
+  let chipsHtml = `
+    <button class="filter-chip ${selectedModelFilter === 'ALL' ? 'active' : ''}" data-model="ALL">
+      <span>SEMUA</span>
+      <span class="chip-count">${allDevs.length}</span>
+    </button>
+  `;
+
+  Array.from(modelCounts.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .forEach(([model, count]) => {
+      const isActive = selectedModelFilter === model;
+      chipsHtml += `
+        <button class="filter-chip ${isActive ? 'active' : ''}" data-model="${model}">
+          <span>${model}</span>
+          <span class="chip-count">${count}</span>
+        </button>
+      `;
+    });
+
+  els.standbyFilterChips.innerHTML = chipsHtml;
+
+  // Attach chip listeners
+  els.standbyFilterChips.querySelectorAll('.filter-chip').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      const target = e.currentTarget as HTMLElement;
+      selectedModelFilter = target.dataset.model || 'ALL';
+      renderStandbyDevices();
+    });
+  });
+
+  // 2. Filter devices for table display
+  const filteredDevs = allDevs.filter(({ device }) => {
+    if (selectedModelFilter === 'ALL') return true;
+    return (device.model || '').trim() === selectedModelFilter;
+  });
+
+  if (filteredDevs.length === 0) {
+    els.standbyTableBody.innerHTML = `
+      <tr>
+        <td colspan="5" class="empty-table-cell">
+          ${allDevs.length === 0 ? 'Tidak ada perangkat standby terdeteksi. Pastikan ADB bridge berjalan.' : 'Tidak ada perangkat yang cocok dengan filter model.'}
+        </td>
+      </tr>
+    `;
+    els.addToWorkflowBtn.disabled = true;
     return;
   }
 
-  els.fleetAccordionList.innerHTML = '';
+  let tableHtml = '';
+  for (const { device, nodeId } of filteredDevs) {
+    const isChecked = selectedStandbySerials.has(device.serial);
+    const isBusy = activeRunDevices.includes(device.serial);
+    const isUserDebug = (device.build_type || '').toLowerCase().includes('userdebug');
 
-  for (const node of nodes) {
-    const isExpanded = expandedNodes.has(node.nodeId);
-    const nodeItem = document.createElement('div');
-    nodeItem.className = `node-accordion-item ${isExpanded ? 'expanded' : ''}`;
-    nodeItem.dataset.nodeId = node.nodeId;
-
-    // Filter devices based on search query
-    const filteredDevices = (node.devices || []).filter((dev) => {
-      if (!deviceSearchQuery) return true;
-      const haystack = `${dev.model} ${dev.serial} ${dev.android} ${dev.csc} ${dev.build} ${dev.modem}`.toLowerCase();
-      return haystack.includes(deviceSearchQuery);
-    });
-
-    const devCount = node.devices?.length || 0;
-
-    nodeItem.innerHTML = `
-      <div class="node-accordion-header" data-toggle-node="${node.nodeId}">
-        <div class="node-header-left">
-          <svg class="chevron-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
-          <span class="node-name-text">${node.nodeId}</span>
-          <span class="node-os-pill">${node.os}</span>
-          <span class="node-dev-count-tag">${devCount} dev</span>
-        </div>
-        <div class="node-header-right" onclick="event.stopPropagation()">
-          <button class="btn btn-xs btn-outline" data-action="update-node" data-node="${node.nodeId}">Update</button>
-          <button class="btn btn-xs btn-ghost" data-action="preflight-node" data-node="${node.nodeId}">Preflight</button>
-          <button class="btn btn-xs btn-ghost" data-action="select-node-devs" data-node="${node.nodeId}">All</button>
-        </div>
-      </div>
-
-      <div class="node-accordion-body">
-        <div class="node-devices-inner">
-          ${
-            filteredDevices.length === 0
-              ? `<div style="padding: 12px; text-align: center; color: var(--text-muted); font-size: 11px;">${devCount === 0 ? 'No ADB devices detected' : 'No devices match search'}</div>`
-              : filteredDevices
-                  .map((dev) => {
-                    const isSelected = selectedDevices.has(dev.serial);
-                    return `
-                <div class="device-card-modern ${isSelected ? 'selected' : ''}" data-serial="${dev.serial}" data-node-id="${node.nodeId}">
-                  <div class="device-check-col">
-                    <input type="checkbox" class="device-checkbox" data-serial="${dev.serial}" data-node-id="${node.nodeId}" ${isSelected ? 'checked' : ''} />
-                  </div>
-                  <div class="device-content-col">
-                    <div class="device-title-row">
-                      <span class="device-model-bold">${dev.model || 'Unknown Device'}</span>
-                      <span class="state-badge-sm ${dev.state}">${dev.state}</span>
-                    </div>
-                    <div class="device-specs-grid">
-                      <div><span class="spec-key">SN:</span> ${dev.serial || '-'}</div>
-                      <div><span class="spec-key">OS:</span> Android ${dev.android || '-'}</div>
-                      <div><span class="spec-key">CSC:</span> ${cleanSpec(dev.csc)}</div>
-                      <div><span class="spec-key">Build:</span> ${dev.build || '-'}</div>
-                      <div><span class="spec-key">Modem:</span> ${cleanSpec(dev.modem)}</div>
-                      <div><span class="spec-key">Patch:</span> ${dev.security_patch || '-'}</div>
-                    </div>
-                    <div class="device-actions-row">
-                      <button class="btn btn-xs btn-outline" data-dev-act="home" data-serial="${dev.serial}" data-node="${node.nodeId}">Home</button>
-                      <button class="btn btn-xs btn-outline" data-dev-act="lamp" data-serial="${dev.serial}" data-node="${node.nodeId}">Lamp</button>
-                      <button class="btn btn-xs btn-outline" data-dev-act="clear" data-serial="${dev.serial}" data-node="${node.nodeId}">Clear Res</button>
-                    </div>
-                  </div>
-                </div>
-              `;
-                  })
-                  .join('')
-          }
-        </div>
-      </div>
+    tableHtml += `
+      <tr data-serial="${device.serial}" data-node="${nodeId}">
+        <td style="text-align: center;">
+          <input type="checkbox" class="standby-dev-check" data-serial="${device.serial}" data-node="${nodeId}" data-model="${device.model || 'Unknown'}" data-pda="${device.build || '-'}" data-type="${device.build_type || 'user'}" ${isChecked ? 'checked' : ''} />
+        </td>
+        <td>
+          <span class="pill-pc-id">${nodeId}</span>
+        </td>
+        <td>
+          <div class="model-title-wrap">
+            <span class="model-bold">${device.model || 'Unknown Device'}</span>
+            <span class="type-pill ${isUserDebug ? 'userdebug' : 'user'}">${isUserDebug ? 'USERDEBUG' : 'USER'}</span>
+          </div>
+          <div class="pda-subtext">${device.build || '-'}</div>
+        </td>
+        <td>
+          <span class="serial-mono">${device.serial}</span>
+        </td>
+        <td>
+          <span class="status-pill ${isBusy ? 'busy' : 'ready'}">${isBusy ? 'BUSY' : 'READY'}</span>
+        </td>
+      </tr>
     `;
-
-    els.fleetAccordionList.appendChild(nodeItem);
   }
 
-  attachAccordionListeners();
-  updateSelectionUI();
-}
+  els.standbyTableBody.innerHTML = tableHtml;
 
-function attachAccordionListeners() {
-  // Accordion Toggle
-  document.querySelectorAll('[data-toggle-node]').forEach((el) => {
-    el.addEventListener('click', (e) => {
-      const nodeId = (e.currentTarget as HTMLElement).dataset.toggleNode!;
-      if (expandedNodes.has(nodeId)) {
-        expandedNodes.delete(nodeId);
-      } else {
-        expandedNodes.add(nodeId);
-      }
-      renderFleetAccordion();
-    });
-  });
-
-  // Node Header Quick Actions
-  document.querySelectorAll('[data-action]').forEach((btn) => {
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const target = e.currentTarget as HTMLElement;
-      const act = target.dataset.action;
-      const nodeId = target.dataset.node!;
-
-      if (act === 'update-node') {
-        if (confirm(`Trigger remote silent update on node ${nodeId}?`)) {
-          appendConsole(`[System] Dispatching update to node ${nodeId}...`, 'sys');
-          sendToHub({ type: 'UPDATE_BRIDGE', payload: { nodeId } });
-        }
-      } else if (act === 'preflight-node') {
-        runPreflightForNode(nodeId);
-      } else if (act === 'select-node-devs') {
-        const node = fleet.nodes[nodeId];
-        if (node && node.devices) {
-          for (const dev of node.devices) {
-            selectedDevices.set(dev.serial, nodeId);
-          }
-          renderFleetAccordion();
-        }
-      }
-    });
-  });
-
-  // Device Selection Checkbox
-  document.querySelectorAll('.device-checkbox').forEach((cb) => {
+  // Standby Checkbox Listeners
+  els.standbyTableBody.querySelectorAll('.standby-dev-check').forEach((cb) => {
     cb.addEventListener('change', (e) => {
       const target = e.target as HTMLInputElement;
       const serial = target.dataset.serial!;
-      const nodeId = target.dataset.nodeId!;
       if (target.checked) {
-        selectedDevices.set(serial, nodeId);
+        selectedStandbySerials.add(serial);
       } else {
-        selectedDevices.delete(serial);
+        selectedStandbySerials.delete(serial);
       }
-      renderFleetAccordion();
+      updateStandbySelectionUI();
     });
   });
 
-  // Device Action Buttons
-  document.querySelectorAll('[data-dev-act]').forEach((btn) => {
-    btn.addEventListener('click', (e) => {
-      const target = e.currentTarget as HTMLElement;
-      const act = target.dataset.devAct;
-      const serial = target.dataset.serial!;
-      const nodeId = target.dataset.node!;
-
-      if (act === 'home') {
-        sendToHub({ type: 'PRESS_HOME', payload: { nodeId, serial } });
-      } else if (act === 'lamp') {
-        sendToHub({ type: 'SET_LAMP', payload: { nodeId, serial, state: true } });
-      } else if (act === 'clear') {
-        if (confirm(`Archive and clear result directory for ${serial}?`)) {
-          sendToHub({ type: 'CLEAR_RESULTS', payload: { nodeId, serial } });
-        }
-      }
-    });
-  });
+  updateStandbySelectionUI();
 }
 
-function updateSelectionUI() {
-  const count = selectedDevices.size;
-  els.selectionPill.textContent = `${count} Selected`;
-  els.selectionPill.className = `selection-pill ${count > 0 ? 'active' : ''}`;
-  els.activeDevicesSummary.textContent = `${count} device${count === 1 ? '' : 's'} queued`;
+function updateStandbySelectionUI() {
+  const count = selectedStandbySerials.size;
+  els.addToWorkflowBtn.disabled = count === 0;
 
-  const hasTools = getSelectedTools().length > 0;
-  els.runBatchBtn.disabled = count === 0 || !hasTools || activeRunId !== null;
+  const allChecks = els.standbyTableBody.querySelectorAll('.standby-dev-check') as NodeListOf<HTMLInputElement>;
+  if (allChecks.length > 0) {
+    const allChecked = Array.from(allChecks).every(c => c.checked);
+    els.selectAllStandbyCheck.checked = allChecked;
+  } else {
+    els.selectAllStandbyCheck.checked = false;
+  }
+}
+
+// Workflow Area
+function renderWorkflow() {
+  const count = workflowDevices.size;
+  els.workflowUnitCount.textContent = `${count}/${count} Unit`;
+
+  const models = Array.from(new Set(Array.from(workflowDevices.values()).map(d => d.model)));
+  els.workflowModelTag.textContent = models.length > 0 ? models.join(', ') : 'FP448';
+
+  // Render Workflow Devices List
+  if (count === 0) {
+    els.workflowDevicesHeaderTitle.textContent = `DEVICES (0 Unit)`;
+    els.workflowDevicesList.innerHTML = `<div class="empty-sub-placeholder">Tidak ada perangkat aktif di workflow ini. Centang perangkat di tabel Standby dan klik [Add to Workflow].</div>`;
+    els.startAutomationBtn.disabled = true;
+  } else {
+    els.workflowDevicesHeaderTitle.textContent = `DEVICES (${count} Unit)`;
+    let devChipsHtml = '';
+    for (const [serial, dev] of workflowDevices.entries()) {
+      devChipsHtml += `
+        <div class="workflow-dev-chip">
+          <span>${dev.nodeId} / <strong>${dev.model}</strong> (${serial})</span>
+          <button class="btn-remove-dev-chip" data-remove-serial="${serial}" title="Remove">&times;</button>
+        </div>
+      `;
+    }
+    els.workflowDevicesList.innerHTML = devChipsHtml;
+
+    els.workflowDevicesList.querySelectorAll('[data-remove-serial]').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        const s = (e.currentTarget as HTMLElement).dataset.removeSerial!;
+        workflowDevices.delete(s);
+        renderWorkflow();
+      });
+    });
+
+    els.startAutomationBtn.disabled = activeRunId !== null || getSelectedTools().length === 0;
+  }
 }
 
 function getSelectedTools(): string[] {
   const tools: string[] = [];
-  els.toolChipGrid.querySelectorAll('input:checked').forEach((input) => {
-    tools.push((input as HTMLInputElement).value);
+  els.toolSwitches.forEach((sw) => {
+    if (sw.checked) {
+      tools.push(sw.dataset.tool!);
+    }
   });
   return tools;
 }
 
-function setRunState(running: boolean) {
-  if (running) {
-    els.batchStatusTag.textContent = 'RUNNING';
-    els.batchStatusTag.className = 'status-indicator-tag running';
-    els.runBatchBtn.disabled = true;
-    els.cancelBatchBtn.disabled = false;
-  } else {
-    activeRunId = null;
-    els.batchStatusTag.textContent = 'IDLE';
-    els.batchStatusTag.className = 'status-indicator-tag idle';
-    els.cancelBatchBtn.disabled = true;
-    updateSelectionUI();
+// Test Run Execution
+function startAutomation() {
+  const tools = getSelectedTools();
+  const devices = Array.from(workflowDevices.keys());
+
+  if (devices.length === 0 || tools.length === 0) {
+    alert('Pilih minimal 1 perangkat dan 1 testcase.');
+    return;
   }
+
+  const runId = `run-${Date.now()}`;
+  activeRunId = runId;
+  activeRunStartTime = Date.now();
+  activeRunDevices = devices;
+  activeRunTools = tools;
+
+  const nodeBatches = new Map<string, string[]>();
+  for (const [serial, item] of workflowDevices.entries()) {
+    let list = nodeBatches.get(item.nodeId);
+    if (!list) {
+      list = [];
+      nodeBatches.set(item.nodeId, list);
+    }
+    list.push(serial);
+  }
+
+  activeRunNodeId = Array.from(nodeBatches.keys())[0] || 'syncmaster';
+
+  // Update UI to running state
+  els.startAutomationBtn.style.display = 'none';
+  els.cancelAutomationBtn.style.display = 'inline-flex';
+  els.terminalActivePulse.style.display = 'inline-block';
+
+  // Reset tool table states
+  tools.forEach((t) => {
+    setToolRowStatus(t, 'RUNNING', 'Running automated test...');
+  });
+
+  // Start timer
+  if (activeRunTimerInterval) clearInterval(activeRunTimerInterval);
+  activeRunTimerInterval = setInterval(() => {
+    if (activeRunStartTime) {
+      const elapsed = Math.floor((Date.now() - activeRunStartTime) / 1000);
+      const timeStr = formatTimeDigital(elapsed);
+      tools.forEach((t) => {
+        const timeEl = document.getElementById(`time_${t}`);
+        if (timeEl) timeEl.textContent = timeStr;
+      });
+      els.modalRuntimeTag.textContent = formatDuration(elapsed);
+    }
+  }, 1000);
+
+  // Update Terminal Modal Tag
+  els.modalRunStatusBadge.textContent = '[RUNNING]';
+  els.modalRunStatusBadge.className = 'modal-status-badge running';
+  els.modalNodeTitle.textContent = `STS - ${activeRunNodeId} (${devices.length} dev)`;
+
+  appendModalLog(`[Hub] Starting Automation Suite ${runId} across ${nodeBatches.size} node(s)...`, 'sys');
+
+  // Dispatch TRIGGER_RUN to each node
+  for (const [nodeId, devList] of nodeBatches.entries()) {
+    sendToHub({
+      type: 'TRIGGER_RUN',
+      payload: {
+        nodeId,
+        runId,
+        devices: devList,
+        tools,
+        concurrency: 1,
+        update: false
+      }
+    });
+  }
+
+  renderStandbyDevices();
+}
+
+function cancelAutomation() {
+  if (!activeRunId) return;
+  appendModalLog(`[Hub] Cancelling active automation suite ${activeRunId}...`, 'warn');
+
+  for (const node of Object.values(fleet.nodes)) {
+    sendToHub({
+      type: 'CANCEL_RUN',
+      payload: { nodeId: node.nodeId, runId: activeRunId }
+    });
+  }
+
+  finishCurrentRun('CANCELLED');
+}
+
+function finishCurrentRun(status: 'FINISHED' | 'CANCELLED') {
+  if (activeRunTimerInterval) {
+    clearInterval(activeRunTimerInterval);
+    activeRunTimerInterval = null;
+  }
+
+  const elapsed = activeRunStartTime ? Math.floor((Date.now() - activeRunStartTime) / 1000) : 0;
+  const tools = [...activeRunTools];
+  const devices = [...activeRunDevices];
+  const nodeId = activeRunNodeId;
+
+  // Add to History
+  const historyItem: HistoryItem = {
+    id: activeRunId || `run-${Date.now()}`,
+    nodeId,
+    mode: tools.map(t => t.toUpperCase()).join(', '),
+    devices,
+    runtimeSecs: elapsed,
+    passed: status === 'FINISHED' ? devices.length * tools.length : 0,
+    failed: 0,
+    total: devices.length * tools.length,
+    status,
+    archiveName: `ATM_${devices[0] || 'device'}_results.zip`,
+    timestamp: Date.now()
+  };
+
+  historyList.unshift(historyItem);
+  saveHistoryToDisk(historyList);
+
+  // Update tool table statuses
+  tools.forEach((t) => {
+    setToolRowStatus(
+      t,
+      status === 'FINISHED' ? 'PASSED' : 'STANDBY',
+      status === 'FINISHED' ? 'Completed successfully.' : 'Cancelled.'
+    );
+  });
+
+  // Reset running state
+  activeRunId = null;
+  activeRunStartTime = null;
+  activeRunDevices = [];
+
+  els.startAutomationBtn.style.display = 'inline-flex';
+  els.cancelAutomationBtn.style.display = 'none';
+  els.modalRunStatusBadge.textContent = `[${status}]`;
+  els.modalRunStatusBadge.className = `modal-status-badge ${status.toLowerCase()}`;
+
+  renderAll();
+}
+
+function setToolRowStatus(tool: string, status: 'STANDBY' | 'RUNNING' | 'PASSED' | 'WARNING' | 'FAILED', subtext: string) {
+  const statusEl = document.getElementById(`status_${tool}`);
+  const subtestEl = document.getElementById(`subtest_${tool}`);
+  const resEl = document.getElementById(`res_${tool}`);
+
+  if (statusEl) {
+    statusEl.textContent = status;
+    statusEl.className = `status-pill ${status.toLowerCase()}`;
+  }
+
+  if (subtestEl) {
+    subtestEl.textContent = subtext;
+  }
+
+  if (resEl && status === 'PASSED') {
+    resEl.innerHTML = `
+      <button class="btn-download-sm">Download</button>
+      <span class="badge-res pass">Pass 1</span>
+    `;
+  }
+}
+
+function parseTestcaseProgress(line: string) {
+  // Check for pass/fail/error markers in terminal stream
+  if (line.includes('[Getprop] END Getprop') || line.includes('Getprop execution completed')) {
+    setToolRowStatus('getprop', 'PASSED', 'Pengumpulan build properties sukses.');
+  }
+  if (line.includes('BVT') && line.includes('PASS')) {
+    setToolRowStatus('bvt', 'PASSED', 'BVT Tests completed successfully.');
+  }
+  if (line.includes('SVT') && line.includes('PASS')) {
+    setToolRowStatus('svt', 'PASSED', 'SVT Preload validation passed.');
+  }
+  if (line.includes('SDT') && line.includes('PASS')) {
+    setToolRowStatus('sdt', 'PASSED', 'SDT Device test passed.');
+  }
+}
+
+// History
+function renderHistory() {
+  els.historyCountBadge.textContent = historyList.length.toString();
+
+  if (historyList.length === 0) {
+    els.historyTableBody.innerHTML = `
+      <tr>
+        <td colspan="10" class="empty-table-cell">Belum ada riwayat pengujian.</td>
+      </tr>
+    `;
+    return;
+  }
+
+  let html = '';
+  for (const item of historyList) {
+    const isFinished = item.status === 'FINISHED';
+    html += `
+      <tr data-history-id="${item.id}">
+        <td><span class="pill-pc-id">${item.nodeId}</span></td>
+        <td><strong>${item.mode}</strong></td>
+        <td><span class="pill-pc-id">${item.devices[0] || 'device'}</span></td>
+        <td class="time-col">${formatDuration(item.runtimeSecs)}</td>
+        <td><span class="count-pill-sm ${item.passed > 0 ? 'green' : 'gray'}">${item.passed}</span></td>
+        <td><span class="count-pill-sm ${item.failed > 0 ? 'red' : 'gray'}">${item.failed}</span></td>
+        <td><span class="count-pill-sm gray">${item.total}</span></td>
+        <td><span class="status-pill ${isFinished ? 'finished' : 'cancelled'}">${item.status}</span></td>
+        <td>
+          ${
+            isFinished
+              ? `<a href="#" class="archive-pill-link" onclick="alert('Download archive ${item.archiveName}'); return false;">📦 ${item.archiveName}</a>`
+              : `<span style="color: var(--text-muted); font-size: 10.5px;">No Zip</span>`
+          }
+        </td>
+        <td style="text-align: center;">
+          <button class="btn-icon-danger" data-delete-hist="${item.id}" title="Delete history entry">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+          </button>
+        </td>
+      </tr>
+    `;
+  }
+
+  els.historyTableBody.innerHTML = html;
+
+  els.historyTableBody.querySelectorAll('[data-delete-hist]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      const id = (e.currentTarget as HTMLElement).dataset.deleteHist!;
+      historyList = historyList.filter(h => h.id !== id);
+      saveHistoryToDisk(historyList);
+      renderHistory();
+    });
+  });
+}
+
+function loadHistoryFromDisk(): HistoryItem[] {
+  try {
+    const raw = localStorage.getItem('heist_history_records');
+    if (raw) return JSON.parse(raw);
+  } catch (e) {}
+  return [];
+}
+
+function saveHistoryToDisk(list: HistoryItem[]) {
+  try {
+    localStorage.setItem('heist_history_records', JSON.stringify(list));
+  } catch (e) {}
+}
+
+// Terminal Modal Controls
+function appendModalLog(line: string, level: 'normal' | 'sys' | 'warn' | 'err' | 'success' = 'normal') {
+  logHistory.push(line);
+  if (logHistory.length > 2000) logHistory.shift();
+
+  const div = document.createElement('div');
+  div.className = `term-row ${level}`;
+  div.textContent = line;
+  els.modalConsoleOutput.appendChild(div);
+  els.modalConsoleOutput.scrollTop = els.modalConsoleOutput.scrollHeight;
 }
 
 function sendToHub(msg: object) {
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify(msg));
   } else {
-    appendConsole('[System] Cannot send: Hub WebSocket disconnected', 'err');
-  }
-}
-
-function appendConsole(line: string, level: 'normal' | 'sys' | 'warn' | 'err' | 'success' = 'normal') {
-  logLinesCount++;
-  els.logCount.textContent = `${logLinesCount} lines`;
-
-  const filter = els.logFilterInput.value.toLowerCase().trim();
-  const div = document.createElement('div');
-  div.className = `terminal-row ${level}`;
-  div.textContent = line;
-
-  if (filter && !line.toLowerCase().includes(filter)) {
-    div.style.display = 'none';
-  }
-
-  els.consoleTerminal.appendChild(div);
-
-  if (els.autoScrollCheck.checked) {
-    els.consoleTerminal.scrollTop = els.consoleTerminal.scrollHeight;
+    appendModalLog('[Hub] Error: WebSocket not connected', 'err');
   }
 }
 
@@ -430,162 +744,201 @@ function renderPreflightReport(nodeId: string, report: string[]) {
   els.preflightReportsContainer.appendChild(block);
 }
 
-// Mobile Tab Switcher
-function setupMobileTabs() {
-  const tabBtns = document.querySelectorAll('.mobile-tabbar .tab-btn');
-  tabBtns.forEach((btn) => {
-    btn.addEventListener('click', (e) => {
-      const tab = (e.currentTarget as HTMLElement).dataset.tab as 'fleet' | 'runner' | 'logs';
-      currentMobileTab = tab;
-      tabBtns.forEach((b) => b.classList.remove('active'));
-      (e.currentTarget as HTMLElement).classList.add('active');
+// Theme System
+function setupTheme() {
+  const saved = localStorage.getItem('heist_theme') || 'light';
+  document.documentElement.setAttribute('data-theme', saved);
 
-      els.appContent.className = `app-content tab-${tab}`;
-    });
-  });
-  // Default tab
-  els.appContent.className = `app-content tab-fleet`;
-}
-
-// Tool Chips Toggle Class Listener
-function setupToolChips() {
-  els.toolChipGrid.querySelectorAll('.tool-toggle-chip').forEach((chip) => {
-    const input = chip.querySelector('input')!;
-    input.addEventListener('change', () => {
-      chip.classList.toggle('active', input.checked);
-      updateSelectionUI();
-    });
+  els.themeToggleBtn.addEventListener('click', () => {
+    const current = document.documentElement.getAttribute('data-theme') || 'light';
+    const next = current === 'light' ? 'dark' : 'light';
+    document.documentElement.setAttribute('data-theme', next);
+    localStorage.setItem('heist_theme', next);
   });
 }
 
-// Device Search Filter
-els.deviceSearchInput.addEventListener('input', () => {
-  deviceSearchQuery = els.deviceSearchInput.value.toLowerCase().trim();
-  els.clearSearchBtn.style.display = deviceSearchQuery ? 'block' : 'none';
-  renderFleetAccordion();
-});
-
-els.clearSearchBtn.addEventListener('click', () => {
-  els.deviceSearchInput.value = '';
-  deviceSearchQuery = '';
-  els.clearSearchBtn.style.display = 'none';
-  renderFleetAccordion();
-});
-
-// Select / Deselect All
-els.selectAllBtn.addEventListener('click', () => {
-  for (const [nodeId, node] of Object.entries(fleet.nodes)) {
-    for (const dev of node.devices || []) {
-      selectedDevices.set(dev.serial, nodeId);
-    }
-  }
-  renderFleetAccordion();
-});
-
-els.deselectAllBtn.addEventListener('click', () => {
-  selectedDevices.clear();
-  renderFleetAccordion();
-});
-
-// Batch Execution
-els.runBatchBtn.addEventListener('click', () => {
-  const tools = getSelectedTools();
-  if (tools.length === 0 || selectedDevices.size === 0) return;
-
-  const concurrency = parseInt(els.concurrencyInput.value, 10) || 1;
-  const update = els.updateToolsCheck.checked;
-
-  const nodeBatches = new Map<string, string[]>();
-  for (const [serial, nodeId] of selectedDevices.entries()) {
-    let list = nodeBatches.get(nodeId);
-    if (!list) {
-      list = [];
-      nodeBatches.set(nodeId, list);
-    }
-    list.push(serial);
-  }
-
-  const runId = `run-${Date.now()}`;
-  activeRunId = runId;
-  setRunState(true);
-
-  appendConsole(`[System] Initiating Batch Suite ${runId} across ${nodeBatches.size} node(s)...`, 'sys');
-
-  for (const [nodeId, devices] of nodeBatches.entries()) {
-    sendToHub({
-      type: 'TRIGGER_RUN',
-      payload: {
-        nodeId,
-        runId,
-        devices,
-        tools,
-        concurrency,
-        update
+// Accordion Toggles
+function setupAccordions() {
+  // Main Dashboard Cards (Workflow, Standby, History)
+  document.querySelectorAll('[data-toggle]').forEach((header) => {
+    header.addEventListener('click', (e) => {
+      const card = (e.currentTarget as HTMLElement).closest('.dashboard-card');
+      if (card) {
+        card.classList.toggle('expanded');
       }
     });
-  }
-});
-
-els.cancelBatchBtn.addEventListener('click', () => {
-  if (!activeRunId) return;
-  appendConsole(`[System] Cancelling Batch Suite ${activeRunId}...`, 'warn');
-  for (const node of Object.values(fleet.nodes)) {
-    sendToHub({
-      type: 'CANCEL_RUN',
-      payload: { nodeId: node.nodeId, runId: activeRunId }
-    });
-  }
-  setRunState(false);
-});
-
-// Console controls
-els.clearLogsBtn.addEventListener('click', () => {
-  els.consoleTerminal.innerHTML = '';
-  logLinesCount = 0;
-  els.logCount.textContent = '0 lines';
-});
-
-els.copyLogsBtn.addEventListener('click', () => {
-  const text = Array.from(els.consoleTerminal.querySelectorAll('.terminal-row'))
-    .map((el) => el.textContent)
-    .join('\n');
-  navigator.clipboard.writeText(text);
-  appendConsole('[System] Console content copied to clipboard', 'sys');
-});
-
-els.logFilterInput.addEventListener('input', () => {
-  const filter = els.logFilterInput.value.toLowerCase().trim();
-  els.consoleTerminal.querySelectorAll('.terminal-row').forEach((el) => {
-    const text = el.textContent?.toLowerCase() || '';
-    (el as HTMLElement).style.display = text.includes(filter) ? '' : 'none';
   });
-});
 
-// Preflight controls
-els.preflightAllBtn.addEventListener('click', () => {
-  const nodes = Object.values(fleet.nodes);
-  if (nodes.length === 0) {
-    alert('No PC nodes connected');
-    return;
-  }
-  els.preflightModal.style.display = 'flex';
-  els.preflightReportsContainer.innerHTML = '';
-  for (const n of nodes) {
-    runPreflightForNode(n.nodeId);
-  }
-});
+  // Sub Accordions
+  document.querySelectorAll('[data-toggle-sub]').forEach((subHeader) => {
+    subHeader.addEventListener('click', (e) => {
+      const box = (e.currentTarget as HTMLElement).closest('.sub-accordion-box');
+      if (box) {
+        box.classList.toggle('expanded');
+      }
+    });
+  });
 
-els.refreshBtn.addEventListener('click', () => {
-  appendConsole('[System] Refreshing fleet status...', 'sys');
-});
+  // Expand all by default
+  document.querySelectorAll('.dashboard-card').forEach(c => c.classList.add('expanded'));
+  document.querySelectorAll('.sub-accordion-box').forEach(b => b.classList.add('expanded'));
+}
 
-els.closePreflightModal.addEventListener('click', () => {
-  els.preflightModal.style.display = 'none';
-});
+// Event Listeners Setup
+function setupEventListeners() {
+  // Standby Select All Checkbox
+  els.selectAllStandbyCheck.addEventListener('change', () => {
+    const checked = els.selectAllStandbyCheck.checked;
+    els.standbyTableBody.querySelectorAll('.standby-dev-check').forEach((cb) => {
+      (cb as HTMLInputElement).checked = checked;
+      const s = (cb as HTMLInputElement).dataset.serial!;
+      if (checked) {
+        selectedStandbySerials.add(s);
+      } else {
+        selectedStandbySerials.delete(s);
+      }
+    });
+    updateStandbySelectionUI();
+  });
 
-// Initialize on Load
+  // Add to Workflow button
+  els.addToWorkflowBtn.addEventListener('click', () => {
+    els.standbyTableBody.querySelectorAll('.standby-dev-check:checked').forEach((cb) => {
+      const target = cb as HTMLInputElement;
+      const serial = target.dataset.serial!;
+      const nodeId = target.dataset.node!;
+      const model = target.dataset.model!;
+      const pda = target.dataset.pda!;
+      const buildType = target.dataset.type!;
+      workflowDevices.set(serial, { serial, nodeId, model, pda, buildType });
+    });
+    renderWorkflow();
+  });
+
+  // Reset Busy
+  els.resetBusyBtn.addEventListener('click', () => {
+    activeRunDevices = [];
+    renderStandbyDevices();
+  });
+
+  // Uncheck All Tools
+  els.uncheckAllToolsBtn.addEventListener('click', () => {
+    const allChecked = Array.from(els.toolSwitches).some(s => s.checked);
+    els.toolSwitches.forEach(s => s.checked = !allChecked);
+    els.uncheckAllToolsBtn.textContent = allChecked ? 'Check All' : 'Uncheck';
+    renderWorkflow();
+  });
+
+  els.toolSwitches.forEach((sw) => {
+    sw.addEventListener('change', () => {
+      renderWorkflow();
+    });
+  });
+
+  // Select All Workflow Devices
+  els.selectAllWorkflowDevsBtn.addEventListener('click', () => {
+    const allDevs = getAllConnectedDevices();
+    for (const { device, nodeId } of allDevs) {
+      workflowDevices.set(device.serial, {
+        serial: device.serial,
+        nodeId,
+        model: device.model,
+        pda: device.build,
+        buildType: device.build_type
+      });
+    }
+    renderWorkflow();
+  });
+
+  // Delete Workflow
+  els.deleteWorkflowBtn.addEventListener('click', () => {
+    workflowDevices.clear();
+    renderWorkflow();
+  });
+
+  // Add Workflow
+  els.addWorkflowBtn.addEventListener('click', () => {
+    alert('Workflow baru ditambahkan.');
+  });
+
+  // Execution buttons
+  els.startAutomationBtn.addEventListener('click', startAutomation);
+  els.cancelAutomationBtn.addEventListener('click', cancelAutomation);
+
+  // Clear History
+  els.clearAllHistoryBtn.addEventListener('click', () => {
+    if (confirm('Hapus seluruh riwayat pengujian?')) {
+      historyList = [];
+      saveHistoryToDisk(historyList);
+      renderHistory();
+    }
+  });
+
+  // Search & Filter Inputs
+  els.globalSearchInput.addEventListener('input', () => {
+    globalSearchQuery = els.globalSearchInput.value.toLowerCase().trim();
+    els.clearSearchBtn.style.display = globalSearchQuery ? 'block' : 'none';
+    renderStandbyDevices();
+  });
+
+  els.clearSearchBtn.addEventListener('click', () => {
+    els.globalSearchInput.value = '';
+    globalSearchQuery = '';
+    els.clearSearchBtn.style.display = 'none';
+    renderStandbyDevices();
+  });
+
+  els.nodeFilterSelect.addEventListener('change', () => {
+    selectedNodeFilter = els.nodeFilterSelect.value;
+    renderStandbyDevices();
+  });
+
+  els.deviceModeSelect.addEventListener('change', () => {
+    selectedDeviceModeFilter = els.deviceModeSelect.value;
+    renderStandbyDevices();
+  });
+
+  // Terminal Modal
+  els.openTerminalLogsBtn.addEventListener('click', () => {
+    els.terminalModal.style.display = 'flex';
+  });
+
+  els.modalCloseBtn.addEventListener('click', () => {
+    els.terminalModal.style.display = 'none';
+  });
+
+  els.modalClearLogBtn.addEventListener('click', () => {
+    els.modalConsoleOutput.innerHTML = '';
+    logHistory = [];
+  });
+
+  els.modalCopyLogBtn.addEventListener('click', () => {
+    navigator.clipboard.writeText(logHistory.join('\n'));
+    alert('Log disalin ke clipboard.');
+  });
+
+  // Preflight
+  els.preflightBtn.addEventListener('click', () => {
+    const nodes = Object.values(fleet.nodes);
+    if (nodes.length === 0) {
+      alert('Tidak ada PC Node yang terhubung.');
+      return;
+    }
+    for (const n of nodes) {
+      runPreflightForNode(n.nodeId);
+    }
+  });
+
+  els.closePreflightModal.addEventListener('click', () => {
+    els.preflightModal.style.display = 'none';
+  });
+}
+
+// Initializer
 document.addEventListener('DOMContentLoaded', () => {
-  setupMobileTabs();
-  setupToolChips();
+  setupTheme();
+  setupAccordions();
+  setupEventListeners();
+  renderAll();
   connectWS();
 });
