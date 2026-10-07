@@ -26,6 +26,13 @@ interface FleetState {
   nodes: Record<string, NodeState>;
 }
 
+function cleanSpec(val?: string): string {
+  if (!val || val === '-') return '-';
+  const parts = val.split(/[,/]/).map((s) => s.trim()).filter(Boolean);
+  const unique = Array.from(new Set(parts));
+  return unique.length > 0 ? unique.join('/') : '-';
+}
+
 // State
 let fleet: FleetState = { nodes: {} };
 const selectedDevices = new Map<string, string>(); // serial -> nodeId
@@ -243,12 +250,12 @@ function renderFleetAccordion() {
                       <span class="state-badge-sm ${dev.state}">${dev.state}</span>
                     </div>
                     <div class="device-specs-grid">
-                      <div><span class="spec-key">SN:</span> ${dev.serial}</div>
-                      <div><span class="spec-key">OS:</span> Android ${dev.android}</div>
-                      <div><span class="spec-key">CSC:</span> ${dev.csc}</div>
-                      <div><span class="spec-key">Build:</span> ${dev.build}</div>
-                      <div><span class="spec-key">Modem:</span> ${dev.modem}</div>
-                      <div><span class="spec-key">Patch:</span> ${dev.security_patch}</div>
+                      <div><span class="spec-key">SN:</span> ${dev.serial || '-'}</div>
+                      <div><span class="spec-key">OS:</span> Android ${dev.android || '-'}</div>
+                      <div><span class="spec-key">CSC:</span> ${cleanSpec(dev.csc)}</div>
+                      <div><span class="spec-key">Build:</span> ${dev.build || '-'}</div>
+                      <div><span class="spec-key">Modem:</span> ${cleanSpec(dev.modem)}</div>
+                      <div><span class="spec-key">Patch:</span> ${dev.security_patch || '-'}</div>
                     </div>
                     <div class="device-actions-row">
                       <button class="btn btn-xs btn-outline" data-dev-act="home" data-serial="${dev.serial}" data-node="${node.nodeId}">Home</button>
