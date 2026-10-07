@@ -1,6 +1,7 @@
 import http from 'http';
 import fs from 'fs';
 import path from 'path';
+import child_process from 'child_process';
 import { fileURLToPath } from 'url';
 import { WebSocketServer, WebSocket } from 'ws';
 import { DeviceInfo, FleetState, NodeState, RunBatchPayload } from './types.js';
@@ -113,6 +114,9 @@ interface ToolRow {
   durationSecs?: number;
   bvtSummary?: { total: number; passed: number; failed: number };
   failedSubtests?: Array<{ name: string; status: string; detail: string }>;
+  ctsvSubtestResults?: Record<string, string>;
+  sdtDebuggableApps?: string[];
+  sdtSecurityPassed?: boolean;
   serial?: string;
   nodeId?: string;
 }
@@ -140,6 +144,311 @@ interface HistoryRecord {
   archiveName: string; timestamp: number;
 }
 
+// Helper functions for Results generation and packaging
+function findRawZipInDir(dir: string): { filename: string; buffer: Buffer } | null {
+  const checkDirs = [
+    path.join(dir, 'VerifierReports'),
+    path.join(dir, 'verifierReports'),
+    dir
+  ];
+
+  const candidates: Array<{ filename: string; fullPath: string; mtime: number }> = [];
+  for (const d of checkDirs) {
+    if (!fs.existsSync(d)) continue;
+    try {
+      if (!fs.statSync(d).isDirectory()) continue;
+      const files = fs.readdirSync(d);
+      for (const f of files) {
+        if (f.toLowerCase().endsWith('.zip')) {
+          const fullPath = path.join(d, f);
+          try {
+            const stat = fs.statSync(fullPath);
+            if (stat.isFile() && stat.size > 0) {
+              candidates.push({ filename: f, fullPath, mtime: stat.mtimeMs });
+            }
+          } catch {}
+        }
+      }
+    } catch {}
+  }
+
+  if (candidates.length === 0) return null;
+
+  candidates.sort((a, b) => {
+    const aIsCts = a.filename.includes('CTS_VERIFIER');
+    const bIsCts = b.filename.includes('CTS_VERIFIER');
+    if (aIsCts && !bIsCts) return -1;
+    if (!aIsCts && bIsCts) return 1;
+    if (aIsCts && bIsCts) {
+      return b.filename.localeCompare(a.filename);
+    }
+    return b.mtime - a.mtime;
+  });
+
+  const best = candidates[0];
+  try {
+    return { filename: best.filename, buffer: fs.readFileSync(best.fullPath) };
+  } catch {
+    return null;
+  }
+}
+
+function findLocalResultFolder(model: string, pda: string, toolFolder: string): string | null {
+  const candidateRoots = [
+    RESULTS_ROOT,
+    '/atm-results',
+    path.join(RESULTS_ROOT, 'results'),
+    '/data/results',
+    '/data'
+  ];
+  const norm = (s: string) => String(s || '').replace(/[-_]/g, '').toLowerCase().trim();
+  const targetPdaNorm = norm(pda);
+  const targetModelNorm = model ? norm(model) : '';
+
+  for (const root of candidateRoots) {
+    const resultsDirs = [
+      path.join(root, 'results'),
+      root
+    ];
+    for (const resultsDir of resultsDirs) {
+      if (!fs.existsSync(resultsDir) || !fs.statSync(resultsDir).isDirectory()) continue;
+
+      if (model && pda) {
+        const directVariants = [
+          path.join(resultsDir, model, pda, toolFolder),
+          path.join(resultsDir, model.replace(/[-_]/g, '_'), pda, toolFolder),
+          path.join(resultsDir, model.replace(/[-_]/g, '-'), pda, toolFolder)
+        ];
+        for (const d of directVariants) {
+          if (fs.existsSync(d) && fs.statSync(d).isDirectory()) return d;
+        }
+      }
+
+      let modelDirs: string[] = [];
+      try {
+        modelDirs = fs.readdirSync(resultsDir);
+      } catch {
+        continue;
+      }
+
+      for (const mEntry of modelDirs) {
+        const mPath = path.join(resultsDir, mEntry);
+        try {
+          if (!fs.statSync(mPath).isDirectory()) continue;
+        } catch {
+          continue;
+        }
+
+        const mEntryNorm = norm(mEntry);
+        const modelMatches = !targetModelNorm || mEntryNorm === targetModelNorm || mEntryNorm.includes(targetModelNorm) || targetModelNorm.includes(mEntryNorm);
+
+        let pdaDirs: string[] = [];
+        try {
+          pdaDirs = fs.readdirSync(mPath);
+        } catch {
+          continue;
+        }
+
+        for (const pEntry of pdaDirs) {
+          const pPath = path.join(mPath, pEntry);
+          try {
+            if (!fs.statSync(pPath).isDirectory()) continue;
+          } catch {
+            continue;
+          }
+
+          const pEntryNorm = norm(pEntry);
+          const pdaMatches = !targetPdaNorm || pEntryNorm === targetPdaNorm || pEntryNorm.startsWith(targetPdaNorm) || targetPdaNorm.startsWith(pEntryNorm);
+
+          if (pdaMatches) {
+            let toolDirs: string[] = [];
+            try {
+              toolDirs = fs.readdirSync(pPath);
+            } catch {
+              continue;
+            }
+
+            for (const tEntry of toolDirs) {
+              const tPath = path.join(pPath, tEntry);
+              try {
+                if (fs.statSync(tPath).isDirectory() && tEntry.toLowerCase() === toolFolder.toLowerCase()) {
+                  return tPath;
+                }
+              } catch {
+                continue;
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function parseCtsvXmlSubtests(xml: string): Record<string, string> {
+  const results: Record<string, string> = {
+    DeviceOwnerTestsNormal: 'Not Executed',
+    BYODManagedProvisioningNormal: 'Not Executed',
+  };
+
+  if (!xml || typeof xml !== 'string') return results;
+
+  const testRegex = /<Test\b([^>]*?)(?:\/?>)/gi;
+  let match;
+  while ((match = testRegex.exec(xml)) !== null) {
+    const attrs = match[1];
+    const resMatch = attrs.match(/result="([^"]+)"/i);
+    const nameMatch = attrs.match(/name="([^"]+)"/i);
+    const result = resMatch ? resMatch[1].toLowerCase() : '';
+    const name = nameMatch ? nameMatch[1] : '';
+
+    const status = 
+      result === 'pass' ? 'Passed' :
+      result === 'fail' ? 'Failed' :
+      result === 'not_executed' ? 'Not Executed' : 'Not Executed';
+
+    if (/DeviceOwnerPositiveTestActivity|CHECK_DEVICE_OWNER|DeviceOwner/i.test(name)) {
+      results.DeviceOwnerTestsNormal = status;
+    }
+    if (/ByodFlowTestActivity|BYOD_ProfileOwnerInstalled|Byod/i.test(name)) {
+      results.BYODManagedProvisioningNormal = status;
+    }
+  }
+
+  const testCaseRegex = /<TestCase\b([^>]*)>([\s\S]*?)<\/TestCase>/gi;
+  while ((match = testCaseRegex.exec(xml)) !== null) {
+    const caseAttrs = match[1];
+    const caseBody = match[2];
+    const caseNameMatch = caseAttrs.match(/name="([^"]+)"/i);
+    const caseName = caseNameMatch ? caseNameMatch[1] : '';
+
+    const testMatchInCase = caseBody.match(/<Test\b[^>]*result="([^"]+)"/i);
+    if (testMatchInCase) {
+      const res = testMatchInCase[1].toLowerCase();
+      const status =
+        res === 'pass' ? 'Passed' :
+        res === 'fail' ? 'Failed' : 'Not Executed';
+
+      if (/DeviceOwnerPositiveTestActivity|DeviceOwner/i.test(caseName)) {
+        results.DeviceOwnerTestsNormal = status;
+      }
+      if (/ByodFlowTestActivity|Byod/i.test(caseName)) {
+        results.BYODManagedProvisioningNormal = status;
+      }
+    }
+  }
+
+  return results;
+}
+
+function getCtsvSubtestResultsFromXml(model: string, pda: string): Record<string, string> | null {
+  const ctsvDir = findLocalResultFolder(model, pda, 'CTSVerifier');
+  if (!ctsvDir) return null;
+  let xmlPath = path.join(ctsvDir, 'test_result.xml');
+  if (!fs.existsSync(xmlPath)) {
+    try {
+      const subEntries = fs.readdirSync(ctsvDir, { withFileTypes: true });
+      for (const entry of subEntries) {
+        if (entry.isDirectory()) {
+          const cand = path.join(ctsvDir, entry.name, 'test_result.xml');
+          if (fs.existsSync(cand)) {
+            xmlPath = cand;
+            break;
+          }
+        }
+      }
+    } catch {}
+  }
+  if (!fs.existsSync(xmlPath)) return null;
+  try {
+    const xmlContent = fs.readFileSync(xmlPath, 'utf8');
+    return parseCtsvXmlSubtests(xmlContent);
+  } catch {
+    return null;
+  }
+}
+
+function parseSdtXml(xmlContent: string): { status: ToolStatus; subtext: string; debuggableApps?: string[]; securityPassed?: boolean } {
+  // 1. Check <TestPackage name="Security"> ... <Test name="NoDebuggableApps" value="..." />
+  const secPkgMatch = xmlContent.match(/<TestPackage\s+name=["']Security["'][^>]*>([\s\S]*?)<\/TestPackage>/i);
+  if (secPkgMatch) {
+    const secBody = secPkgMatch[1];
+    const testMatch = secBody.match(/<Test\s+name=["']NoDebuggableApps["']\s+value=["']([^"']*)["']/i);
+    if (testMatch) {
+      const val = testMatch[1].trim();
+      if (val.toLowerCase() === 'no bad apps found') {
+        return { status: 'PASSED', subtext: 'Security check passed: no bad apps found', securityPassed: true, debuggableApps: [] };
+      } else {
+        const debuggableApps = val.split(/[\/\s,\n]+/).map((s) => s.trim()).filter(Boolean);
+        return {
+          status: 'ERROR',
+          subtext: `Security check failed: NoDebuggableApps = '${val}'`,
+          securityPassed: false,
+          debuggableApps
+        };
+      }
+    }
+  }
+
+  // 2. Fallback: <Test name="NoDebuggableApps" value="..." /> anywhere
+  const testMatch = xmlContent.match(/<Test\s+name=["']NoDebuggableApps["']\s+value=["']([^"']*)["']/i);
+  if (testMatch) {
+    const val = testMatch[1].trim();
+    if (val.toLowerCase() === 'no bad apps found') {
+      return { status: 'PASSED', subtext: 'Security check passed: no bad apps found', securityPassed: true, debuggableApps: [] };
+    } else {
+      const debuggableApps = val.split(/[\/\s,\n]+/).map((s) => s.trim()).filter(Boolean);
+      return {
+        status: 'ERROR',
+        subtext: `Security check failed: NoDebuggableApps = '${val}'`,
+        securityPassed: false,
+        debuggableApps
+      };
+    }
+  }
+
+  // 3. Fallback: <NoDebuggableApps status="..." />
+  const stMatch = xmlContent.match(/<NoDebuggableApps\s+status=["']([^"']*)["']/i);
+  if (stMatch) {
+    const st = stMatch[1].trim().toUpperCase();
+    if (st === 'OK' || st === 'TRUE' || st === 'PASS') {
+      return { status: 'PASSED', subtext: `SDT check passed: NoDebuggableApps status=${st}`, securityPassed: true, debuggableApps: [] };
+    } else {
+      return { status: 'ERROR', subtext: `SDT check failed: NoDebuggableApps status=${st}`, securityPassed: false, debuggableApps: [] };
+    }
+  }
+
+  return { status: 'PASSED', subtext: 'SDT result parsed.', securityPassed: true };
+}
+
+function getSdtResultFromLocal(model: string, pda: string): { status: ToolStatus; subtext: string; debuggableApps?: string[]; securityPassed?: boolean } | null {
+  const sdtDir = findLocalResultFolder(model, pda, 'SDT');
+  if (!sdtDir) return null;
+
+  const xmlPath = path.join(sdtDir, 'sdt.xml');
+  if (fs.existsSync(xmlPath)) {
+    try {
+      return parseSdtXml(fs.readFileSync(xmlPath, 'utf8'));
+    } catch {}
+  }
+
+  try {
+    const files = fs.readdirSync(sdtDir);
+    for (const file of files) {
+      if (file.toLowerCase().endsWith('.zip')) {
+        const fullZip = path.join(sdtDir, file);
+        try {
+          const stdout = child_process.execSync(`unzip -p "${fullZip}" sdt.xml`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 3000 });
+          if (stdout) return parseSdtXml(stdout);
+        } catch {}
+      }
+    }
+  } catch {}
+
+  return null;
+}
+
 const STATE_FILE = path.join(RESULTS_ROOT, 'state.json');
 const app = {
   workflows: {} as Record<string, DeviceWorkflow>,
@@ -161,6 +470,23 @@ try {
         row.status = 'STANDBY';
         row.subtext = 'Interrupted.';
       }
+    }
+    const ctsvXmlSub = getCtsvSubtestResultsFromXml(wf.model, wf.pda);
+    if (ctsvXmlSub) {
+      if (!wf.toolStatus['ctsv']) {
+        wf.toolStatus['ctsv'] = { status: 'PASSED', subtext: 'CTS-Verifier selesai.' };
+      }
+      wf.toolStatus['ctsv'].ctsvSubtestResults = ctsvXmlSub;
+    }
+    const sdtRes = getSdtResultFromLocal(wf.model, wf.pda);
+    if (sdtRes) {
+      wf.toolStatus['sdt'] = {
+        ...(wf.toolStatus['sdt'] || {}),
+        status: sdtRes.status,
+        subtext: sdtRes.subtext,
+        sdtDebuggableApps: sdtRes.debuggableApps || [],
+        sdtSecurityPassed: sdtRes.securityPassed
+      };
     }
   }
 } catch {
@@ -275,6 +601,30 @@ function parseProgress(wf: DeviceWorkflow, line: string) {
     return;
   }
 
+  // 3b. CTS-V Subtest event
+  const ctsvSubtestMatch = line.match(/\[([^\]]+)\]\s+CTSV_SUBTEST\t([^\t]+)\t([^\t]+)\t?(.*)/);
+  if (ctsvSubtestMatch) {
+    const status = ctsvSubtestMatch[2].trim();
+    const name = ctsvSubtestMatch[3].trim();
+    if (!wf.toolStatus['ctsv']) wf.toolStatus['ctsv'] = { status: 'RUNNING', subtext: '', serial: wf.serial, nodeId: wf.nodeId };
+    if (!wf.toolStatus['ctsv'].ctsvSubtestResults) wf.toolStatus['ctsv'].ctsvSubtestResults = {};
+    wf.toolStatus['ctsv'].ctsvSubtestResults[name] = status;
+    broadcastApp(false);
+    return;
+  }
+
+  // 3c. SDT Debuggable Apps event
+  const sdtDebugMatch = line.match(/\[([^\]]+)\]\s+SDT_DEBUGGABLE_APPS\t(.*)/i);
+  if (sdtDebugMatch) {
+    const rawApps = sdtDebugMatch[2].trim();
+    const apps = rawApps.split(/[\/\s,\n]+/).map((s) => s.trim()).filter(Boolean);
+    if (!wf.toolStatus['sdt']) wf.toolStatus['sdt'] = { status: 'ERROR', subtext: 'Debuggable apps detected.', serial: wf.serial, nodeId: wf.nodeId };
+    wf.toolStatus['sdt'].sdtDebuggableApps = apps;
+    wf.toolStatus['sdt'].sdtSecurityPassed = false;
+    broadcastApp(false);
+    return;
+  }
+
   // 4. Tool END event
   const endMatch = line.match(/\[([^\]]+)\]\s+END\s+([^\s]+)\s+exit=(-?\d+)\s+duration=(\d+)s\s+result=([A-Z_]+)(?:\s+(.*))?/i);
   if (endMatch) {
@@ -309,6 +659,26 @@ function parseProgress(wf: DeviceWorkflow, line: string) {
         serial: wf.serial,
         nodeId: wf.nodeId
       };
+      if (toolId === 'ctsv') {
+        const xmlSub = getCtsvSubtestResultsFromXml(wf.model, wf.pda);
+        if (xmlSub) {
+          wf.toolStatus['ctsv'].ctsvSubtestResults = xmlSub;
+        }
+      }
+      if (toolId === 'sdt') {
+        const sdtRes = getSdtResultFromLocal(wf.model, wf.pda);
+        if (sdtRes) {
+          wf.toolStatus['sdt'].status = sdtRes.status;
+          wf.toolStatus['sdt'].subtext = sdtRes.subtext;
+          if (sdtRes.debuggableApps && sdtRes.debuggableApps.length > 0) {
+            wf.toolStatus['sdt'].sdtDebuggableApps = sdtRes.debuggableApps;
+            wf.toolStatus['sdt'].sdtSecurityPassed = false;
+          } else if (sdtRes.securityPassed) {
+            wf.toolStatus['sdt'].sdtSecurityPassed = true;
+            wf.toolStatus['sdt'].sdtDebuggableApps = [];
+          }
+        }
+      }
       broadcastApp(false);
       return;
     }
@@ -341,13 +711,49 @@ function finishDeviceRun(serial: string, status: 'FINISHED' | 'CANCELLED') {
     }
   }
 
-  const total = wf.tools.length;
+  let totalTests = 0;
   let passedCount = 0;
   let failedCount = 0;
   for (const t of wf.tools) {
     const st = wf.toolStatus[t]?.status;
-    if (st === 'PASSED' || st === 'WARNING') passedCount++;
-    else if (st === 'ERROR' || st === 'FAILED') failedCount++;
+    const isPassed = st === 'PASSED' || st === 'WARNING';
+    const isFailed = st === 'ERROR' || st === 'FAILED';
+
+    if (t === 'ctsv') {
+      const sub = wf.toolStatus['ctsv']?.ctsvSubtestResults;
+      if (sub && Object.keys(sub).length > 0) {
+        let ctsvPassed = 0;
+        let ctsvFailed = 0;
+        for (const res of Object.values(sub)) {
+          const l = res.toLowerCase();
+          if (l === 'pass' || l === 'passed') ctsvPassed++;
+          else if (l === 'fail' || l === 'failed') ctsvFailed++;
+        }
+        totalTests += Object.keys(sub).length;
+        passedCount += ctsvPassed;
+        failedCount += ctsvFailed;
+      } else {
+        totalTests += 2;
+        if (isPassed) passedCount += 2;
+        else if (isFailed) failedCount += 2;
+      }
+    } else if (t === 'bvt') {
+      const bvtSum = wf.toolStatus['bvt']?.bvtSummary;
+      if (bvtSum && bvtSum.total > 0) {
+        totalTests += bvtSum.total;
+        passedCount += bvtSum.passed || 0;
+        failedCount += bvtSum.failed || 0;
+      } else {
+        totalTests += 1;
+        if (isPassed) passedCount += 1;
+        else if (isFailed) failedCount += 1;
+      }
+    } else {
+      totalTests += 1;
+      if (isPassed) passedCount += 1;
+      else if (isFailed) failedCount += 1;
+    }
+
     if (status === 'CANCELLED' && st === 'RUNNING') {
       wf.toolStatus[t].status = 'STANDBY';
       wf.toolStatus[t].subtext = 'Dibatalkan.';
@@ -364,7 +770,7 @@ function finishDeviceRun(serial: string, status: 'FINISHED' | 'CANCELLED') {
     runtimeSecs: Math.floor((Date.now() - runInfo.startedAt) / 1000),
     passed: passedCount,
     failed: failedCount,
-    total,
+    total: totalTests,
     status,
     archiveName: `ATM_${pda}.zip`,
     timestamp: Date.now()
@@ -501,6 +907,8 @@ function handleAppIntent(type: string, payload: any, ui: WebSocket): boolean {
       for (const d of payload.devices || []) {
         const s = str(d.serial);
         if (busy.has(s) || app.workflows[s]) continue;
+        const ctsvXmlSub = getCtsvSubtestResultsFromXml(str(d.model), str(d.pda));
+        const sdtRes = getSdtResultFromLocal(str(d.model), str(d.pda));
         app.workflows[s] = {
           serial: s,
           nodeId: str(d.nodeId),
@@ -508,7 +916,10 @@ function handleAppIntent(type: string, payload: any, ui: WebSocket): boolean {
           pda: str(d.pda),
           buildType: str(d.buildType),
           tools: ['ctsv', 'getprop', 'bvt', 'svt', 'sdt'],
-          toolStatus: {},
+          toolStatus: {
+            ...(ctsvXmlSub ? { ctsv: { status: 'PASSED', subtext: 'CTS-Verifier selesai.', ctsvSubtestResults: ctsvXmlSub } } : {}),
+            ...(sdtRes ? { sdt: { status: sdtRes.status, subtext: sdtRes.subtext } } : {})
+          },
           ctsvSubtests: { DeviceOwnerTestsNormal: true, BYODManagedProvisioningNormal: true },
           run: null
         };
@@ -537,6 +948,13 @@ function handleAppIntent(type: string, payload: any, ui: WebSocket): boolean {
       const wf = app.workflows[s];
       if (wf && !wf.run) {
         wf.tools = (payload.tools || []).filter((t: string) => ['getprop', 'bvt', 'svt', 'sdt', 'ctsv'].includes(t));
+        if (wf.tools.includes('ctsv') && !wf.toolStatus['ctsv']?.ctsvSubtestResults) {
+          const ctsvXmlSub = getCtsvSubtestResultsFromXml(wf.model, wf.pda);
+          if (ctsvXmlSub) {
+            if (!wf.toolStatus['ctsv']) wf.toolStatus['ctsv'] = { status: 'STANDBY', subtext: 'Standby.' };
+            wf.toolStatus['ctsv'].ctsvSubtestResults = ctsvXmlSub;
+          }
+        }
         broadcastApp();
       }
       return true;
@@ -657,86 +1075,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // Helper functions for Results generation and packaging
-  function findLocalResultFolder(model: string, pda: string, toolFolder: string): string | null {
-    const candidateRoots = [RESULTS_ROOT];
-    const norm = (s: string) => String(s || '').replace(/[-_]/g, '').toLowerCase().trim();
-    const targetPdaNorm = norm(pda);
-    const targetModelNorm = model ? norm(model) : '';
 
-    for (const root of candidateRoots) {
-      const resultsDir = path.join(root, 'results');
-      if (!fs.existsSync(resultsDir) || !fs.statSync(resultsDir).isDirectory()) continue;
-
-      // 1. Direct path check if model and pda are provided
-      if (model && pda) {
-        const direct1 = path.join(resultsDir, model, pda, toolFolder);
-        if (fs.existsSync(direct1) && fs.statSync(direct1).isDirectory()) return direct1;
-      }
-
-      // 2. Scan all model directories inside results/
-      let modelDirs: string[] = [];
-      try {
-        modelDirs = fs.readdirSync(resultsDir);
-      } catch {
-        continue;
-      }
-
-      for (const mEntry of modelDirs) {
-        const mPath = path.join(resultsDir, mEntry);
-        try {
-          if (!fs.statSync(mPath).isDirectory()) continue;
-        } catch {
-          continue;
-        }
-
-        const mEntryNorm = norm(mEntry);
-        const modelMatches = !targetModelNorm || mEntryNorm === targetModelNorm || mEntryNorm.includes(targetModelNorm) || targetModelNorm.includes(mEntryNorm);
-
-        // Scan PDA subdirectories inside model directory
-        let pdaDirs: string[] = [];
-        try {
-          pdaDirs = fs.readdirSync(mPath);
-        } catch {
-          continue;
-        }
-
-        for (const pEntry of pdaDirs) {
-          const pPath = path.join(mPath, pEntry);
-          try {
-            if (!fs.statSync(pPath).isDirectory()) continue;
-          } catch {
-            continue;
-          }
-
-          const pEntryNorm = norm(pEntry);
-          const pdaMatches = !targetPdaNorm || pEntryNorm === targetPdaNorm || pEntryNorm.startsWith(targetPdaNorm) || targetPdaNorm.startsWith(pEntryNorm);
-
-          if (pdaMatches) {
-            // Check toolFolder inside pPath
-            let toolDirs: string[] = [];
-            try {
-              toolDirs = fs.readdirSync(pPath);
-            } catch {
-              continue;
-            }
-
-            for (const tEntry of toolDirs) {
-              const tPath = path.join(pPath, tEntry);
-              try {
-                if (fs.statSync(tPath).isDirectory() && tEntry.toLowerCase() === toolFolder.toLowerCase()) {
-                  return tPath;
-                }
-              } catch {
-                continue;
-              }
-            }
-          }
-        }
-      }
-    }
-    return null;
-  }
 
   function readDirectoryFiles(dir: string, baseDir: string = dir): Array<{ name: string; content: Buffer }> {
     let results: Array<{ name: string; content: Buffer }> = [];
@@ -757,8 +1096,7 @@ const server = http.createServer((req, res) => {
     return results;
   }
 
-
-  function getTestcaseZipBuffer(toolName: string, pda: string, model: string): Buffer {
+  function getTestcaseZip(toolName: string, pda: string, model: string): { filename: string; buffer: Buffer } {
     const tLower = toolName.toLowerCase();
     let candidateFolders = ['Getprop'];
     let canonicalName = 'Getprop';
@@ -768,13 +1106,26 @@ const server = http.createServer((req, res) => {
     else if (tLower.includes('cts') || tLower.includes('ctsv')) { candidateFolders = ['CTSVerifier', 'CTSV', 'CTS-V']; canonicalName = 'CTSVerifier'; }
     else if (tLower.includes('getprop')) { candidateFolders = ['Getprop']; canonicalName = 'Getprop'; }
 
+    const isCtsv = canonicalName === 'CTSVerifier';
+
     // 1. Try reading real folder from disk if available
     for (const folderName of candidateFolders) {
       const localDir = findLocalResultFolder(model, pda, folderName);
       if (localDir) {
+        // If CTS-V, return raw zip directly with original raw filename from VerifierReports!
+        if (isCtsv) {
+          const rawZip = findRawZipInDir(localDir);
+          if (rawZip) {
+            return rawZip;
+          }
+        }
+
         const localFiles = readDirectoryFiles(localDir);
         if (localFiles.length > 0) {
-          return createZipBuffer(localFiles);
+          return {
+            filename: `${canonicalName}_${pda}.zip`,
+            buffer: createZipBuffer(localFiles)
+          };
         }
       }
     }
@@ -800,7 +1151,10 @@ const server = http.createServer((req, res) => {
       { name: `result.json`, content: Buffer.from(fallbackJson, 'utf8') },
     ];
 
-    return createZipBuffer(fallbackFiles);
+    return {
+      filename: `${canonicalName}_${pda}.zip`,
+      buffer: createZipBuffer(fallbackFiles)
+    };
   }
 
   const TOOL_KEYS: Array<[string, (t: string) => boolean]> = [
@@ -818,8 +1172,10 @@ const server = http.createServer((req, res) => {
 
     for (const [folder, match] of TOOL_KEYS) {
       if (!includeAll && !toolsLower.some(match)) continue;
-      const zip = getTestcaseZipBuffer(folder, pda, model);
-      if (zip) files.push({ name: `${folder}_${pda}.zip`, content: zip });
+      const tc = getTestcaseZip(folder, pda, model);
+      if (tc && tc.buffer) {
+        files.push({ name: tc.filename, content: tc.buffer });
+      }
     }
     return createZipBuffer(files);
   }
@@ -873,7 +1229,7 @@ const server = http.createServer((req, res) => {
       return;
     }
 
-    // 2. Individual Testcase Zip Download (Getprop_{PDA}.zip, BVT_{PDA}.zip, SVT_{PDA}.zip, SDT_{PDA}.zip, CTSV_{PDA}.zip)
+    // 2. Individual Testcase Zip Download (Getprop_{PDA}.zip, BVT_{PDA}.zip, SVT_{PDA}.zip, SDT_{PDA}.zip, or raw CTS-V zip)
     let tcName = 'Getprop';
     if (tool.includes('bvt') || safeName.toLowerCase().startsWith('bvt')) tcName = 'BVT';
     else if (tool.includes('svt') || safeName.toLowerCase().startsWith('svt')) tcName = 'SVT';
@@ -881,8 +1237,9 @@ const server = http.createServer((req, res) => {
     else if (tool.includes('cts') || safeName.toLowerCase().startsWith('cts')) tcName = 'CTSV';
     else if (tool.includes('getprop') || safeName.toLowerCase().startsWith('getprop')) tcName = 'Getprop';
 
-    const outTcName = `${tcName}_${pda}.zip`;
-    const tcZip = getTestcaseZipBuffer(tcName, pda, model);
+    const testcaseResult = getTestcaseZip(tcName, pda, model);
+    const outTcName = testcaseResult.filename;
+    const tcZip = testcaseResult.buffer;
 
     res.writeHead(200, {
       'Content-Type': 'application/zip',

@@ -61,6 +61,9 @@ interface DeviceWorkflow {
       durationSecs?: number;
       bvtSummary?: { total: number; passed: number; failed: number };
       failedSubtests?: Array<{ name: string; status: string; detail: string }>;
+      ctsvSubtestResults?: Record<string, string>;
+      sdtDebuggableApps?: string[];
+      sdtSecurityPassed?: boolean;
       serial?: string;
       nodeId?: string;
     }
@@ -537,13 +540,33 @@ function getStatusClass(status: string): string {
   }
 }
 
+function renderCtsvBadge(subName: string, subResults?: Record<string, string>, toolStatus?: string): string {
+  if (toolStatus === 'RUNNING') return '';
+  if (!subResults) return '';
+  const result = subResults[subName];
+  if (!result) return '';
+  const lower = result.toLowerCase();
+  if (lower === 'pass' || lower === 'passed') {
+    return `<span class="badge-passed">Passed</span>`;
+  }
+  if (lower === 'fail' || lower === 'failed') {
+    return `<span class="badge-failed">Failed</span>`;
+  }
+  if (lower.includes('not') || lower.includes('executed')) {
+    return `<span class="badge-not-executed">Not Executed</span>`;
+  }
+  return `<span class="badge-not-executed">${escapeHtml(result)}</span>`;
+}
+
 function renderToolDetail(toolId: string, wf: DeviceWorkflow, isRunning: boolean): string {
   const rowState = wf.toolStatus[toolId];
   if (toolId === 'ctsv') {
     const ctsvSub = wf.ctsvSubtests || { DeviceOwnerTestsNormal: true, BYODManagedProvisioningNormal: true };
     const count = (ctsvSub.DeviceOwnerTestsNormal ? 1 : 0) + (ctsvSub.BYODManagedProvisioningNormal ? 1 : 0);
     const status = rowState?.status || 'STANDBY';
-    const isPassed = status === 'PASSED';
+    const subResults = rowState?.ctsvSubtestResults;
+    const doBadge = renderCtsvBadge('DeviceOwnerTestsNormal', subResults, status);
+    const byodBadge = renderCtsvBadge('BYODManagedProvisioningNormal', subResults, status);
 
     return `
       <div class="ctsv-subtests-container">
@@ -553,14 +576,14 @@ function renderToolDetail(toolId: string, wf: DeviceWorkflow, isRunning: boolean
             <input type="checkbox" class="ctsv-subtest-chk" data-serial="${wf.serial}" data-subtest="DeviceOwnerTestsNormal" ${ctsvSub.DeviceOwnerTestsNormal ? 'checked' : ''} ${isRunning ? 'disabled' : ''} />
             <span>DeviceOwnerTestsNormal</span>
           </label>
-          ${isPassed && ctsvSub.DeviceOwnerTestsNormal ? `<span class="badge-passed">Passed</span>` : ''}
+          ${doBadge}
         </div>
         <div class="ctsv-subtest-row">
           <label class="custom-checkbox-label">
             <input type="checkbox" class="ctsv-subtest-chk" data-serial="${wf.serial}" data-subtest="BYODManagedProvisioningNormal" ${ctsvSub.BYODManagedProvisioningNormal ? 'checked' : ''} ${isRunning ? 'disabled' : ''} />
             <span>BYODManagedProvisioningNormal</span>
           </label>
-          ${isPassed && ctsvSub.BYODManagedProvisioningNormal ? `<span class="badge-passed">Passed</span>` : ''}
+          ${byodBadge}
         </div>
       </div>
     `;
@@ -583,7 +606,110 @@ function renderToolDetail(toolId: string, wf: DeviceWorkflow, isRunning: boolean
     `;
   }
 
+  if (toolId === 'sdt') {
+    const status = rowState?.status || 'STANDBY';
+    const apps: string[] = rowState?.sdtDebuggableApps || [];
+    const isPassed = status === 'PASSED' || rowState?.sdtSecurityPassed === true;
+    const isFailed = status === 'FAILED' || status === 'ERROR' || apps.length > 0;
+
+    if (isFailed && apps.length > 0) {
+      return `
+        <div class="sdt-detail-container" style="display: flex; flex-direction: column; gap: 4px;">
+          <div style="display: flex; align-items: center; justify-content: space-between; gap: 6px;">
+            <span style="font-size: 11px; font-weight: 600; color: #f87171;">Debuggable Apps (${apps.length})</span>
+            <span class="badge-failed">Failed</span>
+          </div>
+          <div class="sdt-apps-list" style="display: flex; flex-direction: column; gap: 3px; max-height: 85px; overflow-y: auto;">
+            ${apps.map((app) => `
+              <div class="bvt-failed-item" style="padding: 2px 6px; background: rgba(239, 68, 68, 0.08); border-radius: 4px; border-left: 2px solid #ef4444;">
+                <span class="bvt-failed-name" style="font-family: monospace; font-size: 10.5px; color: #fca5a5;" title="${escapeHtml(app)}">${escapeHtml(app)}</span>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      `;
+    }
+
+    if (isPassed) {
+      return `
+        <div class="sdt-detail-container" style="display: flex; align-items: center; justify-content: space-between; gap: 6px;">
+          <span style="font-size: 11px; color: #a7f3d0;">No debuggable apps</span>
+          <span class="badge-passed">Passed</span>
+        </div>
+      `;
+    }
+
+    if (status === 'FAILED' || status === 'ERROR') {
+      return `
+        <div class="sdt-detail-container" style="display: flex; align-items: center; justify-content: space-between; gap: 6px;">
+          <span style="font-size: 11px; color: #f87171;" title="${escapeHtml(rowState?.subtext || 'SDT Failed')}">${escapeHtml(rowState?.subtext || 'Security Check Failed')}</span>
+          <span class="badge-failed">Failed</span>
+        </div>
+      `;
+    }
+
+    return `<span class="empty-dash">-</span>`;
+  }
+
   return `<span class="empty-dash">-</span>`;
+}
+
+function renderResultArchiveCell(toolId: string, wf: DeviceWorkflow, status: string, pda: string): string {
+  const isPassedOrWarning = status === 'PASSED' || status === 'WARNING';
+  const isFailedOrError = status === 'FAILED' || status === 'ERROR';
+  const rowState = wf.toolStatus[toolId];
+
+  const toolUpper = toolId === 'getprop' ? 'Getprop' : toolId === 'ctsv' ? 'CTSV' : toolId.toUpperCase();
+  const zipName = `${toolUpper}_${pda}.zip`;
+
+  if (!isPassedOrWarning && !isFailedOrError) {
+    return `<button class="btn-download-sm" disabled>Download</button>`;
+  }
+
+  let passCount = 0;
+  let failCount = 0;
+
+  if (toolId === 'ctsv') {
+    if (rowState?.ctsvSubtestResults) {
+      for (const res of Object.values(rowState.ctsvSubtestResults)) {
+        const l = res.toLowerCase();
+        if (l === 'pass' || l === 'passed') passCount++;
+        else if (l === 'fail' || l === 'failed') failCount++;
+      }
+    } else {
+      passCount = isPassedOrWarning ? (wf.ctsvSubtests?.BYODManagedProvisioningNormal && wf.ctsvSubtests?.DeviceOwnerTestsNormal ? 2 : 1) : 0;
+      failCount = isFailedOrError ? 1 : 0;
+    }
+  } else if (toolId === 'bvt') {
+    if (rowState?.bvtSummary) {
+      passCount = rowState.bvtSummary.passed || 0;
+      failCount = rowState.bvtSummary.failed || 0;
+    } else {
+      passCount = isPassedOrWarning ? 1 : 0;
+      failCount = isFailedOrError ? 1 : 0;
+    }
+  } else {
+    // getprop, svt, sdt
+    passCount = isPassedOrWarning ? 1 : 0;
+    failCount = isFailedOrError ? 1 : 0;
+  }
+
+  const downloadBtn = isPassedOrWarning
+    ? `<button class="btn-download-sm" onclick="window.downloadFile('${zipName}', '${toolId}', '${wf.serial}', '${wf.nodeId}', '${pda}', '${wf.model}')">Download</button>`
+    : `<button class="btn-download-sm" disabled>Download</button>`;
+
+  let badgesHtml = '';
+  if (passCount > 0) {
+    badgesHtml += `<span class="badge-res pass">Pass ${passCount}</span>`;
+  }
+  if (failCount > 0) {
+    badgesHtml += `<span class="badge-res fail">Fail ${failCount}</span>`;
+  }
+  if (!badgesHtml) {
+    badgesHtml = isPassedOrWarning ? `<span class="badge-res pass">Pass 1</span>` : `<span class="badge-res fail">Fail 1</span>`;
+  }
+
+  return `${downloadBtn}${badgesHtml}`;
 }
 
 function renderWorkflows() {
@@ -626,11 +752,7 @@ function renderWorkflows() {
         const statusClass = getStatusClass(status);
         const durDisplay = rowState?.duration && rowState.duration !== '-' ? rowState.duration : (status === 'RUNNING' && isRunning ? activeTimeStr : '-');
         const detailHtml = renderToolDetail(tool.id, wf, isRunning);
-        const toolUpper = tool.id === 'getprop' ? 'Getprop' : tool.id === 'ctsv' ? 'CTSV' : tool.id.toUpperCase();
-        const zipName = `${toolUpper}_${pda}.zip`;
-        const resultHtml = (status === 'PASSED' || status === 'WARNING')
-          ? `<button class="btn-download-sm" onclick="window.downloadFile('${zipName}', '${tool.id}', '${wf.serial}', '${wf.nodeId}', '${pda}', '${wf.model}')">Download</button><span class="badge-res pass">Pass 1</span>`
-          : `<button class="btn-download-sm" disabled>Download</button>`;
+        const resultHtml = renderResultArchiveCell(tool.id, wf, status, pda);
 
         rowsHtml += `
           <tr>
@@ -879,11 +1001,7 @@ function renderWorkflows() {
         const resEl = document.getElementById(`res_${wf.serial}_${tool.id}`);
         if (resEl) {
           const pda = wf.pda || getDevicePda(wf.serial);
-          const toolUpper = tool.id === 'getprop' ? 'Getprop' : tool.id === 'ctsv' ? 'CTSV' : tool.id.toUpperCase();
-          const zipName = `${toolUpper}_${pda}.zip`;
-          const expectedHtml = (status === 'PASSED' || status === 'WARNING')
-            ? `<button class="btn-download-sm" onclick="window.downloadFile('${zipName}', '${tool.id}', '${wf.serial}', '${wf.nodeId}', '${pda}', '${wf.model}')">Download</button><span class="badge-res pass">Pass 1</span>`
-            : `<button class="btn-download-sm" disabled>Download</button>`;
+          const expectedHtml = renderResultArchiveCell(tool.id, wf, status, pda);
           if (resEl.innerHTML.trim() !== expectedHtml.trim()) {
             resEl.innerHTML = expectedHtml;
           }
@@ -998,7 +1116,10 @@ function getDeviceModel(serial: string): string {
   const url = `/api/download?${params.toString()}`;
   const link = document.createElement('a');
   link.href = url;
-  link.download = fileName;
+  const isCtsv = (tool && (tool.toLowerCase().includes('cts') || tool.toLowerCase().includes('verifier'))) || fileName.toLowerCase().includes('ctsv');
+  if (!isCtsv && fileName) {
+    link.download = fileName;
+  }
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);

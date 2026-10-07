@@ -391,9 +391,9 @@ public class AtmBatchLauncher {
                     if (cancelRequested) break;
                 }
             }
+            updateDeviceStatus(device, "Cleaning up");
+            cleanupInstalledPackages(device.serial);
             if (cancelRequested) {
-                updateDeviceStatus(device, "Cleaning up");
-                cleanupInstalledPackages(device.serial);
                 updateDeviceStatus(device, "Cancelled");
             } else if (!device.status.startsWith("Error")) {
                 updateDeviceStatus(device, "Done");
@@ -483,6 +483,7 @@ public class AtmBatchLauncher {
             }
             Path latest = candidates.stream().max(Comparator.comparingLong(this::lastModified)).orElse(candidates.get(0));
             if (tool == ToolProfile.BVT) return parseBvtResult(latest);
+            if (tool == ToolProfile.SDT) return staticParseSdtResult(latest);
             return new ResultSummary("PASS", latest.toString());
         } catch (Exception ex) {
             return new ResultSummary("ERROR", ex.getMessage());
@@ -552,17 +553,8 @@ public class AtmBatchLauncher {
     }
 
     private void cleanupInstalledPackages(String serial) {
-        Set<String> before = initialThirdPartyPackages.getOrDefault(serial, Set.of());
-        Set<String> after = listThirdPartyPackages(serial);
-        after.removeAll(before);
-        if (after.isEmpty()) {
-            log("[" + serial + "] Cleanup: no new APK packages found.");
-            return;
-        }
-        for (String pkg : after) {
-            CommandResult result = runCommand(Arrays.asList(adb(), "-s", serial, "uninstall", pkg), ROOT, null, Duration.ofSeconds(45));
-            log("[" + serial + "] Cleanup uninstall " + pkg + " exit=" + result.exitCode);
-        }
+        log("[" + serial + "] Starting post-test cleanup...");
+        staticCleanupInstalledPackages(serial);
     }
 
     private void setRunning(boolean running) {
@@ -874,7 +866,7 @@ public class AtmBatchLauncher {
                 if (outcome.exitCode != 0 || outcome.timedOut || !isSuccessfulStatus(summary.status)) ok = false;
             }
         } finally {
-            if (cliCancelRequested) staticCleanupInstalledPackages(device.serial);
+            staticCleanupInstalledPackages(device.serial);
         }
         return ok;
     }
@@ -1049,7 +1041,8 @@ public class AtmBatchLauncher {
                 System.out.flush();
             };
 
-            log.accept("START CTS-V: Automated CTS Verifier sequence");
+            try {
+                log.accept("START CTS-V: Automated CTS Verifier sequence");
 
             // 1. Detect Android Version
             CommandResult verRes = staticRunCommand(Arrays.asList(cliAdbPath, "-s", device.serial, "shell", "getprop", "ro.build.version.release"), ROOT, null, Duration.ofSeconds(10));
@@ -1113,10 +1106,7 @@ public class AtmBatchLauncher {
             }
 
             // 5. Configure Device Admin & Permissions
-            staticRunCommand(Arrays.asList(cliAdbPath, "-s", device.serial, "shell", "dpm", "set-device-owner", "com.android.cts.emptydeviceowner/.EmptyDeviceAdminReceiver"), ROOT, null, Duration.ofSeconds(10));
-            staticRunCommand(Arrays.asList(cliAdbPath, "-s", device.serial, "shell", "pm", "grant", "com.android.cts.verifier", "android.permission.POST_NOTIFICATIONS"), ROOT, null, Duration.ofSeconds(5));
-            staticRunCommand(Arrays.asList(cliAdbPath, "-s", device.serial, "shell", "pm", "grant", "com.example.autoctsver", "android.permission.POST_NOTIFICATIONS"), ROOT, null, Duration.ofSeconds(5));
-            staticRunCommand(Arrays.asList(cliAdbPath, "-s", device.serial, "shell", "appops", "set", "com.android.cts.verifier", "MANAGE_EXTERNAL_STORAGE", "allow"), ROOT, null, Duration.ofSeconds(5));
+            grantCtsVerifierPermissions(device.serial, log);
 
             // 6. Resolve Runner & Filter Test Cases
             if (!cliCancelRequested) {
@@ -1217,6 +1207,10 @@ public class AtmBatchLauncher {
                 List<Path> zips = stream.filter(p -> p.toString().endsWith(".zip")).toList();
                 for (Path zp : zips) {
                     unzipFile(zp, destDir);
+                    Path rootZip = destDir.resolve(zp.getFileName());
+                    if (!zp.equals(rootZip)) {
+                        try { Files.copy(zp, rootZip, StandardCopyOption.REPLACE_EXISTING); } catch (Exception ignored) {}
+                    }
                 }
             } catch (Exception ignored) {}
 
@@ -1273,7 +1267,19 @@ public class AtmBatchLauncher {
             }
             copyCtsTemplatesIfMissing(destDir);
 
+            Map<String, String> subResults = parseCtsvSubtestsFromXml(testResultXml);
+            for (Map.Entry<String, String> entry : subResults.entrySet()) {
+                System.out.println("[" + device.serial + "] CTSV_SUBTEST\t" + entry.getValue() + "\t" + entry.getKey());
+                log.accept("[CTSV] CTSV_SUBTEST\t" + entry.getValue() + "\t" + entry.getKey());
+            }
+
             log.accept("[CTSV] PASS CTS-Verifier automated suites completed. Report saved to " + destDir);
+            } catch (Exception ex) {
+                System.err.println(prefix + "[CTSV Error] " + ex.getMessage());
+                exitCode = 1;
+            } finally {
+                cleanupCtsVerifier(device.serial, log);
+            }
         } catch (Exception ex) {
             System.err.println(prefix + "[CTSV Error] " + ex.getMessage());
             exitCode = 1;
@@ -1307,28 +1313,100 @@ public class AtmBatchLauncher {
         return null;
     }
 
+    private static void grantCtsVerifierPermissions(String serial, Consumer<String> log) {
+        log.accept("[CTSV] Configuring CTS-Verifier permissions and appops...");
+        // Critical AppOps for report creation & device identifiers
+        staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "appops", "set", "com.android.cts.verifier", "android:read_device_identifiers", "allow"), ROOT, null, Duration.ofSeconds(5));
+        staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "appops", "set", "com.android.cts.verifier", "MANAGE_EXTERNAL_STORAGE", "allow"), ROOT, null, Duration.ofSeconds(5));
+        staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "appops", "set", "com.android.cts.verifier", "READ_EXTERNAL_STORAGE", "allow"), ROOT, null, Duration.ofSeconds(5));
+        staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "appops", "set", "com.android.cts.verifier", "WRITE_EXTERNAL_STORAGE", "allow"), ROOT, null, Duration.ofSeconds(5));
+        staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "appops", "set", "com.android.cts.verifier", "SYSTEM_ALERT_WINDOW", "allow"), ROOT, null, Duration.ofSeconds(5));
+
+        // AutoCtsVerifier AppOps
+        staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "appops", "set", "com.example.autoctsver", "MANAGE_EXTERNAL_STORAGE", "allow"), ROOT, null, Duration.ofSeconds(5));
+
+        // Device Owner configurations
+        staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "dpm", "set-device-owner", "--user", "0", "com.android.cts.emptydeviceowner/.EmptyDeviceAdmin"), ROOT, null, Duration.ofSeconds(5));
+        staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "dpm", "set-device-owner", "com.android.cts.emptydeviceowner/.EmptyDeviceAdminReceiver"), ROOT, null, Duration.ofSeconds(5));
+
+        // Global settings
+        staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "settings", "put", "global", "verifier_verify_adb_installs", "0"), ROOT, null, Duration.ofSeconds(5));
+
+        // Runtime permissions
+        String[] perms = {
+            "android.permission.POST_NOTIFICATIONS",
+            "android.permission.READ_PHONE_STATE",
+            "android.permission.READ_PHONE_NUMBERS",
+            "android.permission.READ_PRIVILEGED_PHONE_STATE",
+            "android.permission.WRITE_EXTERNAL_STORAGE",
+            "android.permission.READ_EXTERNAL_STORAGE",
+            "android.permission.MANAGE_EXTERNAL_STORAGE",
+            "android.permission.SYSTEM_ALERT_WINDOW",
+            "android.permission.ACCESS_FINE_LOCATION",
+            "android.permission.ACCESS_COARSE_LOCATION",
+            "android.permission.CAMERA",
+            "android.permission.RECORD_AUDIO"
+        };
+        for (String p : perms) {
+            staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "pm", "grant", "com.android.cts.verifier", p), ROOT, null, Duration.ofSeconds(5));
+        }
+        staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "pm", "grant", "com.example.autoctsver", "android.permission.POST_NOTIFICATIONS"), ROOT, null, Duration.ofSeconds(5));
+        staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "pm", "grant", "com.example.autoctsver", "android.permission.WRITE_EXTERNAL_STORAGE"), ROOT, null, Duration.ofSeconds(5));
+        staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "pm", "grant", "com.example.autoctsver", "android.permission.READ_EXTERNAL_STORAGE"), ROOT, null, Duration.ofSeconds(5));
+    }
+
     private static void triggerCtsVerifierExport(DeviceInfo device, Consumer<String> log) {
         try {
+            grantCtsVerifierPermissions(device.serial, log);
+
             log.accept("[CTSV] Triggering CTS Verifier report export on device...");
             staticRunCommand(Arrays.asList(cliAdbPath, "-s", device.serial, "shell", "input", "keyevent", "224"), ROOT, null, Duration.ofSeconds(5));
             staticRunCommand(Arrays.asList(cliAdbPath, "-s", device.serial, "shell", "am", "start", "-n", "com.android.cts.verifier/.CtsVerifierActivity"), ROOT, null, Duration.ofSeconds(10));
-            Thread.sleep(1500);
-
-            staticRunCommand(Arrays.asList(cliAdbPath, "-s", device.serial, "shell", "input", "keyevent", "82"), ROOT, null, Duration.ofSeconds(5));
-            Thread.sleep(600);
+            Thread.sleep(1200);
 
             String dumpPath = "/sdcard/cts_export_window.xml";
-            staticRunCommand(Arrays.asList(cliAdbPath, "-s", device.serial, "shell", "uiautomator", "dump", dumpPath), ROOT, null, Duration.ofSeconds(10));
-            String xmlDump = staticRunCommand(Arrays.asList(cliAdbPath, "-s", device.serial, "shell", "cat", dumpPath), ROOT, null, Duration.ofSeconds(5)).output.trim();
 
-            int[] coords = parseUiBoundsCenter(xmlDump, "Export");
-            if (coords == null) coords = parseUiBoundsCenter(xmlDump, "Export Results");
-            if (coords == null) coords = parseUiBoundsCenter(xmlDump, "Save");
+            // 1. Dismiss any existing popup or dialog
+            staticRunCommand(Arrays.asList(cliAdbPath, "-s", device.serial, "shell", "uiautomator", "dump", dumpPath), ROOT, null, Duration.ofSeconds(10));
+            String initialDump = staticRunCommand(Arrays.asList(cliAdbPath, "-s", device.serial, "shell", "cat", dumpPath), ROOT, null, Duration.ofSeconds(5)).output.trim();
+            int[] initOk = parseUiBoundsCenter(initialDump, "OK");
+            if (initOk != null) {
+                log.accept("[CTSV] Dismissing initial popup dialog...");
+                staticRunCommand(Arrays.asList(cliAdbPath, "-s", device.serial, "shell", "input", "tap", String.valueOf(initOk[0]), String.valueOf(initOk[1])), ROOT, null, Duration.ofSeconds(5));
+                Thread.sleep(800);
+            }
+
+            // 2. Open options menu
+            staticRunCommand(Arrays.asList(cliAdbPath, "-s", device.serial, "shell", "uiautomator", "dump", dumpPath), ROOT, null, Duration.ofSeconds(10));
+            String uiDump = staticRunCommand(Arrays.asList(cliAdbPath, "-s", device.serial, "shell", "cat", dumpPath), ROOT, null, Duration.ofSeconds(5)).output.trim();
+            int[] moreCoords = parseUiBoundsCenter(uiDump, "More options");
+            if (moreCoords != null) {
+                staticRunCommand(Arrays.asList(cliAdbPath, "-s", device.serial, "shell", "input", "tap", String.valueOf(moreCoords[0]), String.valueOf(moreCoords[1])), ROOT, null, Duration.ofSeconds(5));
+            } else {
+                staticRunCommand(Arrays.asList(cliAdbPath, "-s", device.serial, "shell", "input", "keyevent", "82"), ROOT, null, Duration.ofSeconds(5));
+            }
+            Thread.sleep(800);
+
+            // 3. Locate and tap Export menu item
+            staticRunCommand(Arrays.asList(cliAdbPath, "-s", device.serial, "shell", "uiautomator", "dump", dumpPath), ROOT, null, Duration.ofSeconds(10));
+            String menuDump = staticRunCommand(Arrays.asList(cliAdbPath, "-s", device.serial, "shell", "cat", dumpPath), ROOT, null, Duration.ofSeconds(5)).output.trim();
+            int[] coords = parseUiBoundsCenter(menuDump, "Export");
+            if (coords == null) coords = parseUiBoundsCenter(menuDump, "Export Results");
+            if (coords == null) coords = parseUiBoundsCenter(menuDump, "Save");
 
             if (coords != null) {
                 log.accept("[CTSV] Tapping Export menu at (" + coords[0] + ", " + coords[1] + ")...");
                 staticRunCommand(Arrays.asList(cliAdbPath, "-s", device.serial, "shell", "input", "tap", String.valueOf(coords[0]), String.valueOf(coords[1])), ROOT, null, Duration.ofSeconds(5));
-                Thread.sleep(3500);
+                Thread.sleep(2500);
+
+                // 4. Dismiss "Report saved to: ..." confirmation dialog
+                staticRunCommand(Arrays.asList(cliAdbPath, "-s", device.serial, "shell", "uiautomator", "dump", dumpPath), ROOT, null, Duration.ofSeconds(10));
+                String postDump = staticRunCommand(Arrays.asList(cliAdbPath, "-s", device.serial, "shell", "cat", dumpPath), ROOT, null, Duration.ofSeconds(5)).output.trim();
+                int[] confirmOk = parseUiBoundsCenter(postDump, "OK");
+                if (confirmOk != null) {
+                    staticRunCommand(Arrays.asList(cliAdbPath, "-s", device.serial, "shell", "input", "tap", String.valueOf(confirmOk[0]), String.valueOf(confirmOk[1])), ROOT, null, Duration.ofSeconds(5));
+                    Thread.sleep(600);
+                }
             } else {
                 log.accept("[CTSV] Attempting fallback enter key tap for export...");
                 staticRunCommand(Arrays.asList(cliAdbPath, "-s", device.serial, "shell", "input", "keyevent", "66"), ROOT, null, Duration.ofSeconds(5));
@@ -1418,12 +1496,41 @@ public class AtmBatchLauncher {
         return packages;
     }
 
+    private static void cleanupDeviceAdmin(String serial) {
+        staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "dpm", "remove-active-admin", "com.android.cts.emptydeviceowner/.EmptyDeviceAdmin"), ROOT, null, Duration.ofSeconds(5));
+        staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "dpm", "remove-active-admin", "com.android.cts.emptydeviceowner/.EmptyDeviceAdminReceiver"), ROOT, null, Duration.ofSeconds(5));
+        staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "dpm", "remove-active-admin", "--user", "0", "com.android.cts.emptydeviceowner/.EmptyDeviceAdmin"), ROOT, null, Duration.ofSeconds(5));
+        staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "dpm", "remove-active-admin", "com.android.cts.verifier/com.android.cts.verifier.managedprovisioning.DeviceAdminTestReceiver"), ROOT, null, Duration.ofSeconds(5));
+    }
+
+    private static void cleanupCtsVerifier(String serial, Consumer<String> log) {
+        log.accept("[CTSV] Cleaning up device " + serial + " (removing device admins and uninstalling CTS-V packages)...");
+        cleanupDeviceAdmin(serial);
+        List<String> pkgs = Arrays.asList(
+            "com.example.autoctsver",
+            "com.example.autoctsver.test",
+            "com.android.cts.verifier",
+            "com.android.cts.emptydeviceowner",
+            "com.android.cts.permissionapp",
+            "com.android.cts.verifier.instantapp",
+            "com.android.cts.verifierusbcompanion"
+        );
+        for (String pkg : pkgs) {
+            CommandResult res = staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "uninstall", pkg), ROOT, null, Duration.ofSeconds(20));
+            if (res.output.contains("Success")) {
+                log.accept("[CTSV] Uninstalled " + pkg);
+            }
+        }
+        staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "rm", "-f", "/sdcard/cts_export_window.xml", "/sdcard/window_dump.xml"), ROOT, null, Duration.ofSeconds(5));
+    }
+
     private static void staticCleanupInstalledPackages(String serial) {
+        cleanupCtsVerifier(serial, msg -> System.out.println("[" + serial + "] " + msg));
         Set<String> before = cliInitialThirdPartyPackages.getOrDefault(serial, Set.of());
         Set<String> after = staticListThirdPartyPackages(serial);
         after.removeAll(before);
         if (after.isEmpty()) {
-            System.out.println("[" + serial + "] Cleanup: no new APK packages found.");
+            System.out.println("[" + serial + "] Cleanup: no new third-party APK packages found.");
             return;
         }
         for (String pkg : after) {
@@ -1431,6 +1538,50 @@ public class AtmBatchLauncher {
                     ROOT, null, Duration.ofSeconds(45));
             System.out.println("[" + serial + "] Cleanup uninstall " + pkg + " exit=" + result.exitCode);
         }
+    }
+
+    private static Map<String, String> parseCtsvSubtestsFromXml(Path xmlFile) {
+        Map<String, String> res = new LinkedHashMap<>();
+        res.put("DeviceOwnerTestsNormal", "Not Executed");
+        res.put("BYODManagedProvisioningNormal", "Not Executed");
+        if (xmlFile == null || !Files.exists(xmlFile)) return res;
+        try {
+            String xml = Files.readString(xmlFile, StandardCharsets.UTF_8);
+            Matcher testMatcher = Pattern.compile("<Test\\b([^>]*)", Pattern.CASE_INSENSITIVE).matcher(xml);
+            while (testMatcher.find()) {
+                String attrs = testMatcher.group(1);
+                Matcher rMatch = Pattern.compile("result=\"([^\"]+)\"", Pattern.CASE_INSENSITIVE).matcher(attrs);
+                Matcher nMatch = Pattern.compile("name=\"([^\"]+)\"", Pattern.CASE_INSENSITIVE).matcher(attrs);
+                String result = rMatch.find() ? rMatch.group(1).toLowerCase() : "";
+                String name = nMatch.find() ? nMatch.group(1) : "";
+                String status = "pass".equalsIgnoreCase(result) ? "Passed" : ("fail".equalsIgnoreCase(result) ? "Failed" : "Not Executed");
+                if (Pattern.compile("DeviceOwnerPositiveTestActivity|CHECK_DEVICE_OWNER|DeviceOwner", Pattern.CASE_INSENSITIVE).matcher(name).find()) {
+                    res.put("DeviceOwnerTestsNormal", status);
+                }
+                if (Pattern.compile("ByodFlowTestActivity|BYOD_ProfileOwnerInstalled|Byod", Pattern.CASE_INSENSITIVE).matcher(name).find()) {
+                    res.put("BYODManagedProvisioningNormal", status);
+                }
+            }
+            Matcher caseMatcher = Pattern.compile("<TestCase\\b([^>]*)>([\\s\\S]*?)</TestCase>", Pattern.CASE_INSENSITIVE).matcher(xml);
+            while (caseMatcher.find()) {
+                String caseAttrs = caseMatcher.group(1);
+                String caseBody = caseMatcher.group(2);
+                Matcher cnMatch = Pattern.compile("name=\"([^\"]+)\"", Pattern.CASE_INSENSITIVE).matcher(caseAttrs);
+                String caseName = cnMatch.find() ? cnMatch.group(1) : "";
+                Matcher tbMatch = Pattern.compile("<Test\\b[^>]*result=\"([^\"]+)\"", Pattern.CASE_INSENSITIVE).matcher(caseBody);
+                if (tbMatch.find()) {
+                    String r = tbMatch.group(1).toLowerCase();
+                    String status = "pass".equalsIgnoreCase(r) ? "Passed" : ("fail".equalsIgnoreCase(r) ? "Failed" : "Not Executed");
+                    if (Pattern.compile("DeviceOwnerPositiveTestActivity|DeviceOwner", Pattern.CASE_INSENSITIVE).matcher(caseName).find()) {
+                        res.put("DeviceOwnerTestsNormal", status);
+                    }
+                    if (Pattern.compile("ByodFlowTestActivity|Byod", Pattern.CASE_INSENSITIVE).matcher(caseName).find()) {
+                        res.put("BYODManagedProvisioningNormal", status);
+                    }
+                }
+            }
+        } catch (Exception ignored) {}
+        return res;
     }
 
     private static ResultSummary staticInspectResult(DeviceInfo device, ToolProfile tool, Instant startedAt, int exitCode) {
@@ -1443,6 +1594,12 @@ public class AtmBatchLauncher {
                             : new ResultSummary("FAIL", "Getprop failed exit=" + exitCode);
                 }
                 if (tool == ToolProfile.CTSV) {
+                    Path destDir = ROOT.resolve("results").resolve(safeName(device.model)).resolve(safeName(device.build)).resolve("CTSVerifier");
+                    Path xml = destDir.resolve("test_result.xml");
+                    Map<String, String> subResults = parseCtsvSubtestsFromXml(xml);
+                    for (Map.Entry<String, String> entry : subResults.entrySet()) {
+                        System.out.println("[" + device.serial + "] CTSV_SUBTEST\t" + entry.getValue() + "\t" + entry.getKey());
+                    }
                     return exitCode == 0
                             ? new ResultSummary("PASS", "CTS-Verifier automated suites passed exit=0")
                             : new ResultSummary("FAIL", "CTS-Verifier failed exit=" + exitCode);
@@ -1460,6 +1617,19 @@ public class AtmBatchLauncher {
             }
             Path latest = candidates.stream().max(Comparator.comparingLong(AtmBatchLauncher::staticLastModified)).orElse(candidates.get(0));
             if (tool == ToolProfile.BVT) return staticParseBvtResult(latest);
+            if (tool == ToolProfile.SDT) {
+                String debuggableApps = extractSdtDebuggableApps(latest);
+                if (debuggableApps != null && !debuggableApps.isBlank() && !"no bad apps found".equalsIgnoreCase(debuggableApps.trim())) {
+                    System.out.println("[" + device.serial + "] SDT_DEBUGGABLE_APPS\t" + debuggableApps.trim());
+                }
+                return staticParseSdtResult(latest);
+            }
+            if (tool == ToolProfile.CTSV) {
+                Map<String, String> subResults = parseCtsvSubtestsFromXml(latest);
+                for (Map.Entry<String, String> entry : subResults.entrySet()) {
+                    System.out.println("[" + device.serial + "] CTSV_SUBTEST\t" + entry.getValue() + "\t" + entry.getKey());
+                }
+            }
             return new ResultSummary("PASS", latest.toString());
         } catch (Exception ex) {
             return new ResultSummary("ERROR", ex.getMessage());
@@ -1644,7 +1814,7 @@ public class AtmBatchLauncher {
         try {
             Files.createDirectories(destination.getParent());
         } catch (IOException ex) {
-            return new ResultSummary("PASS", "device file exists: /sdcard/SDTResults.zip; local folder error: " + ex.getMessage());
+            return new ResultSummary("ERROR", "local folder error: " + ex.getMessage());
         }
         CommandResult pull = staticRunCommand(Arrays.asList(adbPath, "-s", device.serial, "pull",
                         "/sdcard/SDTResults.zip", destination.toString()),
@@ -1652,12 +1822,115 @@ public class AtmBatchLauncher {
         if (pull.exitCode == 0 && Files.isRegularFile(destination)) {
             try {
                 int extracted = extractSdtResults(destination, destination.getParent());
-                return new ResultSummary("PASS", "pulled and extracted " + destination + " (" + extracted + " files)");
+                Path sdtXml = destination.getParent().resolve("sdt.xml");
+                Path targetPath = Files.isRegularFile(sdtXml) ? sdtXml : destination;
+                String debuggableApps = extractSdtDebuggableApps(targetPath);
+                if (debuggableApps != null && !debuggableApps.isBlank() && !"no bad apps found".equalsIgnoreCase(debuggableApps.trim())) {
+                    System.out.println("[" + device.serial + "] SDT_DEBUGGABLE_APPS\t" + debuggableApps.trim());
+                }
+                return staticParseSdtResult(targetPath);
             } catch (IOException ex) {
                 return new ResultSummary("ERROR", "pulled SDT result but extraction failed: " + ex.getMessage());
             }
         }
-        return new ResultSummary("PASS", "device file exists: /sdcard/SDTResults.zip; pull exit=" + pull.exitCode);
+        return new ResultSummary("ERROR", "device /sdcard/SDTResults.zip pull failed exit=" + pull.exitCode);
+    }
+
+    private static String extractSdtDebuggableApps(Path fileOrZip) {
+        try {
+            String xmlContent = null;
+            if (fileOrZip.toString().toLowerCase(Locale.ROOT).endsWith(".zip")) {
+                try (java.util.zip.ZipInputStream zis = new java.util.zip.ZipInputStream(Files.newInputStream(fileOrZip))) {
+                    java.util.zip.ZipEntry entry;
+                    while ((entry = zis.getNextEntry()) != null) {
+                        if (entry.getName().toLowerCase(Locale.ROOT).endsWith(".xml")) {
+                            xmlContent = new String(zis.readAllBytes(), StandardCharsets.UTF_8);
+                            break;
+                        }
+                    }
+                }
+            } else if (Files.isRegularFile(fileOrZip)) {
+                xmlContent = Files.readString(fileOrZip, StandardCharsets.UTF_8);
+            }
+            if (xmlContent == null) return null;
+
+            Matcher secPkg = Pattern.compile("<TestPackage\\s+name=[\"']Security[\"'][^>]*>(.*?)</TestPackage>", Pattern.DOTALL | Pattern.CASE_INSENSITIVE).matcher(xmlContent);
+            if (secPkg.find()) {
+                Matcher testMatcher = Pattern.compile("<Test\\s+name=[\"']NoDebuggableApps[\"']\\s+value=[\"']([^\"']*)[\"']", Pattern.CASE_INSENSITIVE).matcher(secPkg.group(1));
+                if (testMatcher.find()) return testMatcher.group(1).trim();
+            }
+            Matcher testMatcher = Pattern.compile("<Test\\s+name=[\"']NoDebuggableApps[\"']\\s+value=[\"']([^\"']*)[\"']", Pattern.CASE_INSENSITIVE).matcher(xmlContent);
+            if (testMatcher.find()) return testMatcher.group(1).trim();
+        } catch (Exception ignored) {}
+        return null;
+    }
+
+    private static ResultSummary staticParseSdtResult(Path fileOrZip) {
+        try {
+            String xmlContent = null;
+            if (fileOrZip.toString().toLowerCase(Locale.ROOT).endsWith(".zip")) {
+                try (java.util.zip.ZipInputStream zis = new java.util.zip.ZipInputStream(Files.newInputStream(fileOrZip))) {
+                    java.util.zip.ZipEntry entry;
+                    while ((entry = zis.getNextEntry()) != null) {
+                        if (entry.getName().toLowerCase(Locale.ROOT).endsWith(".xml")) {
+                            xmlContent = new String(zis.readAllBytes(), StandardCharsets.UTF_8);
+                            break;
+                        }
+                    }
+                }
+            } else if (Files.isRegularFile(fileOrZip)) {
+                xmlContent = Files.readString(fileOrZip, StandardCharsets.UTF_8);
+            }
+
+            if (xmlContent == null || xmlContent.isBlank()) {
+                return new ResultSummary("INCOMPLETE", "SDT result XML empty or missing: " + fileOrZip);
+            }
+
+            return parseSdtXmlContent(xmlContent, fileOrZip.getFileName().toString());
+        } catch (Exception ex) {
+            return new ResultSummary("ERROR", "SDT parse error: " + ex.getMessage());
+        }
+    }
+
+    private static ResultSummary parseSdtXmlContent(String xml, String sourceName) {
+        // 1. Look for <TestPackage name="Security"> ... <Test name="NoDebuggableApps" value="..." /> ... </TestPackage>
+        Matcher secPkg = Pattern.compile("<TestPackage\\s+name=[\"']Security[\"'][^>]*>(.*?)</TestPackage>", Pattern.DOTALL | Pattern.CASE_INSENSITIVE).matcher(xml);
+        if (secPkg.find()) {
+            String secBody = secPkg.group(1);
+            Matcher testMatcher = Pattern.compile("<Test\\s+name=[\"']NoDebuggableApps[\"']\\s+value=[\"']([^\"']*)[\"']", Pattern.CASE_INSENSITIVE).matcher(secBody);
+            if (testMatcher.find()) {
+                String val = testMatcher.group(1).trim();
+                if ("no bad apps found".equalsIgnoreCase(val)) {
+                    return new ResultSummary("PASS", "Security check passed: no bad apps found (" + sourceName + ")");
+                } else {
+                    return new ResultSummary("FAIL", "Security check failed: NoDebuggableApps = '" + val + "' (" + sourceName + ")");
+                }
+            }
+        }
+
+        // 2. Fallback: <Test name="NoDebuggableApps" value="..." /> anywhere
+        Matcher testMatcher = Pattern.compile("<Test\\s+name=[\"']NoDebuggableApps[\"']\\s+value=[\"']([^\"']*)[\"']", Pattern.CASE_INSENSITIVE).matcher(xml);
+        if (testMatcher.find()) {
+            String val = testMatcher.group(1).trim();
+            if ("no bad apps found".equalsIgnoreCase(val)) {
+                return new ResultSummary("PASS", "Security check passed: no bad apps found (" + sourceName + ")");
+            } else {
+                return new ResultSummary("FAIL", "Security check failed: NoDebuggableApps = '" + val + "' (" + sourceName + ")");
+            }
+        }
+
+        // 3. Fallback: <NoDebuggableApps status="..." />
+        Matcher stMatcher = Pattern.compile("<NoDebuggableApps\\s+status=[\"']([^\"']*)[\"']", Pattern.CASE_INSENSITIVE).matcher(xml);
+        if (stMatcher.find()) {
+            String st = stMatcher.group(1).trim();
+            if ("OK".equalsIgnoreCase(st) || "TRUE".equalsIgnoreCase(st) || "PASS".equalsIgnoreCase(st)) {
+                return new ResultSummary("PASS", "SDT check passed: NoDebuggableApps status=" + st + " (" + sourceName + ")");
+            } else {
+                return new ResultSummary("FAIL", "SDT check failed: NoDebuggableApps status=" + st + " (" + sourceName + ")");
+            }
+        }
+
+        return new ResultSummary("PASS", "SDT result parsed (" + sourceName + ")");
     }
 
     private static Path sdtPullDestination(DeviceInfo device) {

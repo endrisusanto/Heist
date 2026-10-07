@@ -15,6 +15,7 @@ services:
       - RESULTS_DIR=/data
     volumes:
       - heist-results:/data
+      - /home/endri-pro/Videos/ATM/ATMv5_20260429/results:/atm-results:ro
 
 volumes:
   heist-results:
