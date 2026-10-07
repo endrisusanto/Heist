@@ -11,6 +11,7 @@ fn tool_folder(tool: &str) -> Option<&'static str> {
     else if t.contains("bvt") || t.contains("basic") { Some("BVT") }
     else if t.contains("svt") || t.contains("preload") { Some("SVT") }
     else if t.contains("sdt") { Some("SDT") }
+    else if t.contains("ctsv") || t.contains("cts") { Some("CTSVerifier") }
     else { None }
 }
 

@@ -199,6 +199,9 @@ function parseProgress(wf: DeviceWorkflow, line: string) {
   if (line.includes('BVT') && line.includes('PASS')) setDeviceToolStatus(wf, 'bvt', 'PASSED', 'BVT Tests completed successfully.');
   if (line.includes('SVT') && line.includes('PASS')) setDeviceToolStatus(wf, 'svt', 'PASSED', 'SVT Preload validation passed.');
   if (line.includes('SDT') && line.includes('PASS')) setDeviceToolStatus(wf, 'sdt', 'PASSED', 'SDT Device test passed.');
+  if ((line.includes('CTS') || line.includes('CTSV')) && (line.includes('PASS') || line.includes('PASSED') || line.includes('OK') || line.includes('test=pass'))) {
+    setDeviceToolStatus(wf, 'ctsv', 'PASSED', 'CTS-Verifier automated suites passed.');
+  }
 }
 
 function finishDeviceRun(serial: string, status: 'FINISHED' | 'CANCELLED') {
@@ -363,7 +366,7 @@ function handleAppIntent(type: string, payload: any, ui: WebSocket): boolean {
           model: str(d.model),
           pda: str(d.pda),
           buildType: str(d.buildType),
-          tools: ['getprop', 'bvt', 'svt', 'sdt'],
+          tools: ['getprop', 'bvt', 'svt', 'sdt', 'ctsv'],
           toolStatus: {},
           run: null
         };
@@ -391,7 +394,7 @@ function handleAppIntent(type: string, payload: any, ui: WebSocket): boolean {
       const s = str(payload.serial);
       const wf = app.workflows[s];
       if (wf && !wf.run) {
-        wf.tools = (payload.tools || []).filter((t: string) => ['getprop', 'bvt', 'svt', 'sdt'].includes(t));
+        wf.tools = (payload.tools || []).filter((t: string) => ['getprop', 'bvt', 'svt', 'sdt', 'ctsv'].includes(t));
         broadcastApp();
       }
       return true;
@@ -548,6 +551,7 @@ const server = http.createServer((req, res) => {
     if (tLower.includes('bvt')) folderName = 'BVT';
     else if (tLower.includes('svt')) folderName = 'SVT';
     else if (tLower.includes('sdt')) folderName = 'SDT';
+    else if (tLower.includes('cts') || tLower.includes('ctsv')) folderName = 'CTSVerifier';
     else if (tLower.includes('getprop')) folderName = 'Getprop';
 
     // 1. Try reading real folder from disk if available
@@ -566,7 +570,8 @@ const server = http.createServer((req, res) => {
     ['Getprop', (t) => t.includes('getprop')],
     ['BVT', (t) => t.includes('bvt') || t.includes('basic')],
     ['SVT', (t) => t.includes('svt') || t.includes('preload')],
-    ['SDT', (t) => t.includes('sdt')]
+    ['SDT', (t) => t.includes('sdt')],
+    ['CTSVerifier', (t) => t.includes('ctsv') || t.includes('cts')]
   ];
 
   function getMasterArchiveZipBuffer(pda: string, model: string, activeTools: string[]): Buffer | null {

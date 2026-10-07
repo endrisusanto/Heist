@@ -58,6 +58,14 @@ pub fn check_preflight(root_path: &str) -> Vec<String> {
         lines.push(check_file(tool, root.join("tools").join(tool)));
     }
 
+    // Check CTS-Verifier Resources
+    let cts_res = root.join("tools").join("resource").join("CTSVerifier");
+    if cts_res.is_dir() {
+        lines.push(format!("[+] Dir OK: CTS-Verifier Resources ({})", cts_res.display()));
+    } else {
+        lines.push(format!("[-] Missing dir: CTS-Verifier Resources ({})", cts_res.display()));
+    }
+
     lines
 }
 

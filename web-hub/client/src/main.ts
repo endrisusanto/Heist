@@ -478,6 +478,11 @@ const TOOL_DEFS: ToolDef[] = [
     id: 'sdt',
     name: 'SDTDeviceTest',
     desc: 'Pengujian komprehensif hardware, sensor, display, modem, interface.'
+  },
+  {
+    id: 'ctsv',
+    name: 'CTS-Verifier',
+    desc: 'Pengujian kepatuhan kompatibilitas Android otomatis (AutoCtsVerifier & CTS-V).'
   }
 ];
 
@@ -515,7 +520,7 @@ function renderWorkflows() {
           ? ((rowState?.status as any) || (isSelected ? 'RUNNING' : 'STANDBY'))
           : ((rowState?.status as any) || 'STANDBY');
         const subtext = rowState?.subtext || (status === 'RUNNING' ? 'Running automated test...' : tool.desc);
-        const toolUpper = tool.id === 'getprop' ? 'Getprop' : tool.id.toUpperCase();
+        const toolUpper = tool.id === 'getprop' ? 'Getprop' : tool.id === 'ctsv' ? 'CTSV' : tool.id.toUpperCase();
         const pda = wf.pda || getDevicePda(wf.serial);
         const zipName = `${toolUpper}_${pda}.zip`;
 
@@ -735,7 +740,7 @@ function renderWorkflows() {
         const resEl = document.getElementById(`res_${wf.serial}_${tool.id}`);
         if (resEl) {
           const pda = wf.pda || getDevicePda(wf.serial);
-          const toolUpper = tool.id === 'getprop' ? 'Getprop' : tool.id.toUpperCase();
+          const toolUpper = tool.id === 'getprop' ? 'Getprop' : tool.id === 'ctsv' ? 'CTSV' : tool.id.toUpperCase();
           const zipName = `${toolUpper}_${pda}.zip`;
           const expectedHtml = status === 'PASSED'
             ? `<button class="btn-download-sm" onclick="window.downloadFile('${zipName}', '${tool.id}', '${wf.serial}', '${wf.nodeId}', '${pda}', '${wf.model}')">Download</button><span class="badge-res pass">Pass 1</span>`
