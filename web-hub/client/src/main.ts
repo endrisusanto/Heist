@@ -573,16 +573,16 @@ function renderToolDetail(toolId: string, wf: DeviceWorkflow, isRunning: boolean
       <div class="ctsv-subtests-container">
         <div class="ctsv-subtests-header">${count}/2 selected</div>
         <div class="ctsv-subtest-row">
-          <label class="custom-checkbox-label">
+          <label class="custom-checkbox-label" title="DeviceOwnerTestsNormal">
             <input type="checkbox" class="ctsv-subtest-chk" data-serial="${wf.serial}" data-subtest="DeviceOwnerTestsNormal" ${ctsvSub.DeviceOwnerTestsNormal ? 'checked' : ''} ${isRunning ? 'disabled' : ''} />
-            <span>DeviceOwnerTestsNormal</span>
+            <span title="DeviceOwnerTestsNormal">DeviceOwnerTestsNormal</span>
           </label>
           ${doBadge}
         </div>
         <div class="ctsv-subtest-row">
-          <label class="custom-checkbox-label">
+          <label class="custom-checkbox-label" title="BYODManagedProvisioningNormal">
             <input type="checkbox" class="ctsv-subtest-chk" data-serial="${wf.serial}" data-subtest="BYODManagedProvisioningNormal" ${ctsvSub.BYODManagedProvisioningNormal ? 'checked' : ''} ${isRunning ? 'disabled' : ''} />
-            <span>BYODManagedProvisioningNormal</span>
+            <span title="BYODManagedProvisioningNormal">BYODManagedProvisioningNormal</span>
           </label>
           ${byodBadge}
         </div>
