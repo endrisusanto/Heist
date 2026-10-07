@@ -482,7 +482,7 @@ const TOOL_DEFS: ToolDef[] = [
   {
     id: 'ctsv',
     name: 'CTS-Verifier',
-    desc: 'Pengujian kepatuhan kompatibilitas Android otomatis (AutoCtsVerifier & CTS-V).'
+    desc: 'Android Compatibility Test Suite Verifier Auto'
   }
 ];
 
