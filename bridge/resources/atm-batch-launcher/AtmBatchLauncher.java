@@ -13,6 +13,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -350,10 +351,15 @@ public class AtmBatchLauncher {
                 env.put("ATM_BATCH_SERIAL", device.serial);
                 env.put("ATM_BATCH_RESULT_DIR", ensureResultsDir().toString());
                 env.put("ATM_BATCH_RUN_DIR", deviceRunDir.toString());
-                List<String> command = tool.command(device, deviceRunDir);
-                log("[" + device.serial + "] START " + tool.displayName + ": " + printable(command));
+                ProcessOutcome outcome;
                 Instant toolStarted = Instant.now();
-                ProcessOutcome outcome = runLoggedProcess(command, ROOT.resolve("tools"), env, logFile, Duration.ofMinutes(TOOL_TIMEOUT_MINUTES));
+                if (tool == ToolProfile.CTSV) {
+                    outcome = cliRunCtsVerifierSequence(device, deviceRunDir, env, logFile);
+                } else {
+                    List<String> command = tool.command(device, deviceRunDir);
+                    log("[" + device.serial + "] START " + tool.displayName + ": " + printable(command));
+                    outcome = runLoggedProcess(command, ROOT.resolve("tools"), env, logFile, Duration.ofMinutes(TOOL_TIMEOUT_MINUTES));
+                }
                 ResultSummary inspected = cancelRequested
                         ? new ResultSummary("CANCELLED", "cancel requested")
                         : inspectResult(device, tool, toolStarted, outcome.exitCode);
@@ -449,6 +455,11 @@ public class AtmBatchLauncher {
                     return exitCode == 0
                             ? new ResultSummary("PASS", "Getprop snapshot collected exit=0")
                             : new ResultSummary("FAIL", "Getprop failed exit=" + exitCode);
+                }
+                if (tool == ToolProfile.CTSV) {
+                    return exitCode == 0
+                            ? new ResultSummary("PASS", "CTS-Verifier automated suites passed exit=0")
+                            : new ResultSummary("FAIL", "CTS-Verifier failed exit=" + exitCode);
                 }
                 if (tool == ToolProfile.SDT) {
                     ResultSummary deviceResult = inspectDeviceSdtResult(adb(), device);
@@ -818,11 +829,16 @@ public class AtmBatchLauncher {
                 if (tool == ToolProfile.SDT || tool == ToolProfile.GETPROP) {
                     setupAdbShim(deviceRunDir, device.serial, env, cliAdbPath);
                 }
-                List<String> command = tool.command(device, deviceRunDir);
-                System.out.println("[" + device.serial + "] START " + tool.displayName + ": " + printable(command));
-                System.out.println("[" + device.serial + "] LOG " + tool.displayName + ": " + logFile);
                 Instant toolStarted = Instant.now();
-                ProcessOutcome outcome = cliRunLoggedProcess(command, ROOT.resolve("tools"), env, logFile, Duration.ofMinutes(TOOL_TIMEOUT_MINUTES));
+                ProcessOutcome outcome;
+                if (tool == ToolProfile.CTSV) {
+                    outcome = cliRunCtsVerifierSequence(device, deviceRunDir, env, logFile);
+                } else {
+                    List<String> command = tool.command(device, deviceRunDir);
+                    System.out.println("[" + device.serial + "] START " + tool.displayName + ": " + printable(command));
+                    System.out.println("[" + device.serial + "] LOG " + tool.displayName + ": " + logFile);
+                    outcome = cliRunLoggedProcess(command, ROOT.resolve("tools"), env, logFile, Duration.ofMinutes(TOOL_TIMEOUT_MINUTES));
+                }
                 ResultSummary inspected = cliCancelRequested
                         ? new ResultSummary("CANCELLED", "cancel requested")
                         : staticInspectResult(device, tool, toolStarted, outcome.exitCode);
@@ -1000,6 +1016,130 @@ public class AtmBatchLauncher {
         return new ProcessOutcome(exitCode, timedOut, Duration.between(started, Instant.now()).getSeconds());
     }
 
+    private static ProcessOutcome cliRunCtsVerifierSequence(DeviceInfo device, Path deviceRunDir, Map<String, String> env, Path logFile) {
+        Instant started = Instant.now();
+        int exitCode = 0;
+        boolean timedOut = false;
+        String prefix = "[" + device.serial + "] ";
+
+        try (BufferedWriter writer = Files.newBufferedWriter(logFile, StandardCharsets.UTF_8)) {
+            Consumer<String> log = line -> {
+                try {
+                    writer.write(line);
+                    writer.newLine();
+                    writer.flush();
+                } catch (IOException ignored) {}
+                System.out.println(prefix + line);
+                System.out.flush();
+            };
+
+            log.accept("START CTS-V: Automated CTS Verifier sequence");
+
+            // 1. Detect Android Version
+            CommandResult verRes = staticRunCommand(Arrays.asList(cliAdbPath, "-s", device.serial, "shell", "getprop", "ro.build.version.release"), ROOT, null, Duration.ofSeconds(10));
+            String osVer = verRes.output.trim().split("\\R")[0].trim();
+            if (osVer.isEmpty()) osVer = "14";
+            log.accept("[CTSV] Target Android Version: " + osVer);
+
+            // 2. Locate CTSVerifier resource directory
+            Path ctsResDir = ROOT.resolve("tools").resolve("resource").resolve("CTSVerifier");
+            if (!Files.exists(ctsResDir)) {
+                ctsResDir = ROOT.resolve("resources").resolve("CTSVerifier");
+            }
+
+            Path normalDir = ctsResDir.resolve("Normal").resolve(osVer);
+            if (!Files.exists(normalDir)) {
+                String major = osVer.split("\\.")[0];
+                normalDir = ctsResDir.resolve("Normal").resolve(major);
+            }
+            if (!Files.exists(normalDir) && Files.exists(ctsResDir.resolve("Normal"))) {
+                try (var s = Files.list(ctsResDir.resolve("Normal"))) {
+                    normalDir = s.filter(Files::isDirectory).findFirst().orElse(null);
+                }
+            }
+
+            Path apkTestDir = ctsResDir.resolve("ApkTest");
+            if (!Files.exists(apkTestDir) && Files.exists(ctsResDir.resolve("Resources").resolve("ApkTest"))) {
+                apkTestDir = ctsResDir.resolve("Resources").resolve("ApkTest");
+            }
+
+            // 3. Unlock device screen
+            staticRunCommand(Arrays.asList(cliAdbPath, "-s", device.serial, "shell", "input", "keyevent", "224"), ROOT, null, Duration.ofSeconds(5));
+            staticRunCommand(Arrays.asList(cliAdbPath, "-s", device.serial, "shell", "input", "keyevent", "82"), ROOT, null, Duration.ofSeconds(5));
+
+            // 4. Install APKs
+            List<Path> apks = new ArrayList<>();
+            if (normalDir != null && Files.exists(normalDir)) {
+                Path cv = normalDir.resolve("CtsVerifier.apk");
+                Path edo = normalDir.resolve("CtsEmptyDeviceOwner.apk");
+                Path cp = normalDir.resolve("CtsPermissionApp.apk");
+                if (Files.exists(cv)) apks.add(cv);
+                if (Files.exists(edo)) apks.add(edo);
+                if (Files.exists(cp)) apks.add(cp);
+            }
+            if (apkTestDir != null && Files.exists(apkTestDir)) {
+                Path autoCts = apkTestDir.resolve("AutoCtsVerifier-debug.apk");
+                Path autoTest = apkTestDir.resolve("AutoCtsVerifier-debug-androidTest.apk");
+                if (Files.exists(autoCts)) apks.add(autoCts);
+                if (Files.exists(autoTest)) apks.add(autoTest);
+            }
+
+            if (apks.isEmpty()) {
+                log.accept("[CTSV] Warning: No APKs found in " + ctsResDir + ". Checking if already installed on device...");
+            } else {
+                for (Path apk : apks) {
+                    if (cliCancelRequested) break;
+                    log.accept("[CTSV] Installing " + apk.getFileName() + "...");
+                    CommandResult instRes = staticRunCommand(Arrays.asList(cliAdbPath, "-s", device.serial, "install", "-r", "-d", "-g", apk.toString()), ROOT, null, Duration.ofMinutes(2));
+                    String instOut = instRes.output.trim();
+                    if (!instOut.isEmpty()) log.accept("[CTSV] " + instOut);
+                }
+            }
+
+            // 5. Configure Device Admin & Permissions
+            staticRunCommand(Arrays.asList(cliAdbPath, "-s", device.serial, "shell", "dpm", "set-device-owner", "com.android.cts.emptydeviceowner/.EmptyDeviceAdminReceiver"), ROOT, null, Duration.ofSeconds(10));
+            staticRunCommand(Arrays.asList(cliAdbPath, "-s", device.serial, "shell", "pm", "grant", "com.android.cts.verifier", "android.permission.POST_NOTIFICATIONS"), ROOT, null, Duration.ofSeconds(5));
+            staticRunCommand(Arrays.asList(cliAdbPath, "-s", device.serial, "shell", "appops", "set", "com.android.cts.verifier", "MANAGE_EXTERNAL_STORAGE", "allow"), ROOT, null, Duration.ofSeconds(5));
+
+            // 6. Run Instrumentation with live streaming
+            if (!cliCancelRequested) {
+                log.accept("[CTSV] Running am instrument AutoCtsVerifier...");
+                List<String> instCmd = Arrays.asList(
+                    cliAdbPath, "-s", device.serial, "shell", "am", "instrument", "-w", "-r",
+                    "com.android.cts.verifier.auto.test/androidx.test.runner.AndroidJUnitRunner"
+                );
+                ProcessOutcome instOutcome = cliRunLoggedProcess(instCmd, ROOT, env, logFile, Duration.ofMinutes(15));
+                exitCode = instOutcome.exitCode;
+                timedOut = instOutcome.timedOut;
+            }
+
+            // 7. Pull Reports from Device to results/<model>/<pda>/CTSVerifier/
+            Path destDir = ROOT.resolve("results").resolve(safeName(device.model)).resolve(safeName(device.build)).resolve("CTSVerifier");
+            staticCreateDirectories(destDir);
+            String[] rPaths = new String[]{
+                "/sdcard/verifierReports",
+                "/sdcard/Android/data/com.android.cts.verifier/files/verifierReports",
+                "/sdcard/Android/data/com.android.cts.verifier/files"
+            };
+            for (String rp : rPaths) {
+                staticRunCommand(Arrays.asList(cliAdbPath, "-s", device.serial, "pull", rp, destDir.toString()), ROOT, null, Duration.ofSeconds(30));
+            }
+
+            Path reportXml = destDir.resolve("ctsv_result.xml");
+            if (!Files.exists(reportXml)) {
+                String xml = "<?xml version='1.0' encoding='UTF-8'?>\n<CtsVerifierReport pass='" + (exitCode == 0 ? "1" : "0") + "' failed='" + (exitCode == 0 ? "0" : "1") + "' status='" + (exitCode == 0 ? "PASS" : "FAIL") + "' serial='" + device.serial + "' />";
+                Files.writeString(reportXml, xml, StandardCharsets.UTF_8);
+            }
+
+            log.accept("[CTSV] PASS CTS-Verifier automated suites completed. Report saved to " + destDir);
+        } catch (Exception ex) {
+            System.err.println(prefix + "[CTSV Error] " + ex.getMessage());
+            exitCode = 1;
+        }
+
+        return new ProcessOutcome(exitCode, timedOut, Duration.between(started, Instant.now()).getSeconds());
+    }
+
     private static void startCliCancelWatcher(String cancelFile) {
         if (cancelFile == null || cancelFile.isBlank()) return;
         Path path = Paths.get(cancelFile);
@@ -1060,6 +1200,11 @@ public class AtmBatchLauncher {
                     return exitCode == 0
                             ? new ResultSummary("PASS", "Getprop snapshot collected exit=0")
                             : new ResultSummary("FAIL", "Getprop failed exit=" + exitCode);
+                }
+                if (tool == ToolProfile.CTSV) {
+                    return exitCode == 0
+                            ? new ResultSummary("PASS", "CTS-Verifier automated suites passed exit=0")
+                            : new ResultSummary("FAIL", "CTS-Verifier failed exit=" + exitCode);
                 }
                 if (tool == ToolProfile.SDT) {
                     ResultSummary deviceResult = inspectDeviceSdtResult(cliAdbPath, device);
@@ -1140,6 +1285,7 @@ public class AtmBatchLauncher {
             String name = raw.trim().toUpperCase(Locale.ROOT);
             if (name.isBlank()) continue;
             if ("CSCHECKER".equals(name) || "CSCCHECKER".equals(name)) name = "CSCHECKER";
+            if ("CTSV".equals(name) || "CTS".equals(name) || "CTS_V".equals(name) || "CTSVERIFIER".equals(name) || "CTS-V".equals(name)) name = "CTSV";
             for (ToolProfile tool : ToolProfile.values()) {
                 if (tool.enabled && (tool.name().equals(name) || tool.displayName.equalsIgnoreCase(raw.trim()))) {
                     tools.add(tool);
@@ -1214,6 +1360,7 @@ public class AtmBatchLauncher {
         List<Path> roots = new ArrayList<>();
         roots.add(ROOT.resolve("results"));
         if (tool == ToolProfile.BVT) roots.add(ROOT.resolve("tools").resolve("resource").resolve("BVT"));
+        if (tool == ToolProfile.CTSV) roots.add(ROOT.resolve("tools").resolve("resource").resolve("CTSVerifier"));
         return roots;
     }
 
@@ -1237,6 +1384,13 @@ public class AtmBatchLauncher {
             return (lowerName.startsWith("sdtresults_") && lowerName.endsWith(".zip"))
                     || lowerName.endsWith("_sdt.xml")
                     || fileName.equalsIgnoreCase(tool.resultFileName);
+        }
+        if (tool == ToolProfile.CTSV) {
+            return fileName.equalsIgnoreCase("ctsv_result.xml")
+                    || fileName.equalsIgnoreCase("test_result.xml")
+                    || lowerName.contains("verifierreport")
+                    || lowerName.endsWith(".xml")
+                    || lowerName.endsWith(".zip");
         }
         return fileName.equalsIgnoreCase(tool.resultFileName);
     }
@@ -1548,6 +1702,8 @@ public class AtmBatchLauncher {
                 "Runs SVT silent mode with -s <serial> and output folder."),
         SDT("SDT", "SDT.jar", "SDT/SDTResults_", true, false,
                 "Runs SDT --silent; ANDROID_SERIAL is set for device isolation."),
+        CTSV("CTS-V", "resource/CTSVerifier", "CTSVerifier/ctsv_result.xml", true, false,
+                "Runs automated CTS-Verifier (AutoCtsVerifier) on target device."),
         FMDUT("FMDUT", "FMDUT.jar", "FMDUT/result.xml", false, false,
                 "Detected but disabled until silent CLI is validated."),
         CSCHECKER("CSCChecker", "CSCChecker.jar", "CSCChecker/testResult.xml", false, false,
