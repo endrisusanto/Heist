@@ -720,6 +720,27 @@ function parseTestcaseProgress(line: string) {
   }
 }
 
+function formatModeChips(modeStr: string): string {
+  if (!modeStr) return `<span class="mode-chip gray">-</span>`;
+  const modes = modeStr.split(/[,+]/).map((m) => m.trim()).filter(Boolean);
+  if (modes.length === 0) return `<span class="mode-chip gray">${modeStr}</span>`;
+
+  return modes
+    .map((m) => {
+      const lower = m.toLowerCase();
+      let colorClass = 'blue';
+      if (lower.includes('getprop')) colorClass = 'cyan';
+      else if (lower.includes('bvt') || lower.includes('basic')) colorClass = 'indigo';
+      else if (lower.includes('svt') || lower.includes('preload')) colorClass = 'purple';
+      else if (lower.includes('sdt') || lower.includes('device')) colorClass = 'amber';
+      else if (lower.includes('full') || lower.includes('auto')) colorClass = 'emerald';
+      else if (lower.includes('custom')) colorClass = 'rose';
+
+      return `<span class="mode-chip ${colorClass}">${m}</span>`;
+    })
+    .join(' ');
+}
+
 // History
 function renderHistory() {
   els.historyCountBadge.textContent = historyList.length.toString();
@@ -739,7 +760,7 @@ function renderHistory() {
     html += `
       <tr data-history-id="${item.id}">
         <td><span class="pill-pc-id">${item.nodeId}</span></td>
-        <td><strong>${item.mode}</strong></td>
+        <td class="history-mode-cell">${formatModeChips(item.mode)}</td>
         <td><span class="pill-pc-id">${item.devices[0] || 'device'}</span></td>
         <td class="time-col">${formatDuration(item.runtimeSecs)}</td>
         <td><span class="count-pill-sm ${item.passed > 0 ? 'green' : 'gray'}">${item.passed}</span></td>
