@@ -112,10 +112,13 @@ html, body {
   background-color: var(--bg-page);
   color: var(--text-main);
   font-family: var(--font-sans);
-  font-size: 12.5px;
+  font-size: 13px;
+  font-weight: 500;
   line-height: 1.45;
   height: 100%;
   width: 100%;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 .app-layout {
@@ -165,14 +168,15 @@ html, body {
 }
 
 .brand-title {
-  font-size: 14px;
+  font-size: 14.5px;
   font-weight: 700;
   color: var(--text-heading);
   letter-spacing: -0.2px;
 }
 
 .brand-subtitle {
-  font-size: 10.5px;
+  font-size: 11px;
+  font-weight: 400;
   color: var(--text-muted);
 }
 
@@ -774,17 +778,20 @@ input:checked + .switch-slider:before {
 }
 
 .tc-name-bold {
-  font-weight: 600;
+  font-weight: 700;
+  font-size: 13px;
   color: var(--text-heading);
 }
 
 .tc-subdesc {
-  font-size: 10.5px;
-  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-subdesc);
 }
 
 .tc-subtests-col {
-  font-size: 10.5px;
+  font-size: 11.5px;
+  font-weight: 400;
   color: var(--text-muted);
   max-width: 400px;
   white-space: pre-wrap;
@@ -793,7 +800,8 @@ input:checked + .switch-slider:before {
 
 .time-col {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 11.5px;
+  font-weight: 600;
   color: var(--text-muted);
 }
 
@@ -980,11 +988,12 @@ input:checked + .switch-slider:before {
 
 .model-bold {
   font-weight: 700;
+  font-size: 13px;
   color: var(--text-heading);
 }
 
 .type-pill {
-  font-size: 9px;
+  font-size: 9.5px;
   font-weight: 800;
   padding: 2px 8px;
   border-radius: var(--radius-pill);
@@ -1013,15 +1022,16 @@ input:checked + .switch-slider:before {
 }
 
 .pda-subtext {
-  font-size: 10px;
-  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-subdesc);
   font-family: var(--font-mono);
 }
 
 .serial-mono {
   font-family: var(--font-mono);
-  font-size: 11px;
-  font-weight: 500;
+  font-size: 12px;
+  font-weight: 600;
   color: var(--text-heading);
 }
 
