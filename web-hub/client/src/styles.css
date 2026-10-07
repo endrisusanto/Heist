@@ -463,6 +463,26 @@ html, body {
   gap: 10px;
 }
 
+.card-title-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.card-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.card-meta-chips {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .accordion-chevron {
   color: var(--text-muted);
   transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
@@ -1856,11 +1876,51 @@ input:checked + .switch-slider:before {
 
   .card-header-left {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: flex-start;
-    gap: 8px;
+    gap: 10px;
     width: 100%;
     min-width: 0;
+  }
+
+  .card-header-left > .accordion-chevron {
+    margin-top: 3px;
+    flex-shrink: 0;
+  }
+
+  .card-title-group {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .card-title-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    gap: 8px;
+  }
+
+  .card-meta-chips {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    width: 100%;
+  }
+
+  #standbyCard .card-header-left,
+  #historyCard .card-header-left {
+    align-items: center;
+  }
+
+  #standbyCard .card-header-left > .accordion-chevron,
+  #historyCard .card-header-left > .accordion-chevron {
+    margin-top: 0;
   }
 
   .card-heading {

@@ -562,11 +562,17 @@ function renderWorkflows() {
           <div class="card-main-header" data-card-serial="${wf.serial}">
             <div class="card-header-left">
               <svg class="accordion-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
-              <h2 class="card-heading">ATM WORKFLOW - ${wf.model || 'Device'}</h2>
-              <span class="pill-pc-id">${wf.nodeId || 'Node'}</span>
-              <span class="serial-mono" style="font-size: 11px; padding: 2px 8px; background: var(--bg-table-header); border: 1px solid var(--border-light); border-radius: var(--radius-pill);">${wf.serial}</span>
-              <span class="pda-subdesc" style="font-size: 11px;">${wf.pda || '-'}</span>
-              ${statusPill}
+              <div class="card-title-group">
+                <div class="card-title-row">
+                  <h2 class="card-heading">ATM WORKFLOW - ${wf.model || 'Device'}</h2>
+                  ${statusPill}
+                </div>
+                <div class="card-meta-chips">
+                  <span class="pill-pc-id">${wf.nodeId || 'Node'}</span>
+                  <span class="serial-mono" style="font-size: 11px; padding: 2px 8px; background: var(--bg-table-header); border: 1px solid var(--border-light); border-radius: var(--radius-pill);">${wf.serial}</span>
+                  <span class="pda-subdesc" style="font-size: 11px;">${wf.pda || '-'}</span>
+                </div>
+              </div>
             </div>
 
             <div class="card-header-right">
