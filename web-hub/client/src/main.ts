@@ -482,148 +482,259 @@ function renderWorkflows() {
     return;
   }
 
-  let html = '';
-  for (const wf of list) {
-    const isRunning = wf.run !== null;
-    const isBusy = isDeviceTesting(wf.serial) && !isRunning;
-    const isCollapsed = collapsedCardSerials.has(wf.serial);
-    const allChecked = TOOL_DEFS.every((t) => wf.tools.includes(t.id));
-    const activeElapsed = isRunning && wf.run ? Math.max(0, Math.floor((Date.now() - (wf.run.startedAt - clockSkew)) / 1000)) : 0;
-    const activeTimeStr = formatTimeDigital(activeElapsed);
+  // ponytail: check if existing card elements match current devices
+  const currentSerials = Object.keys(workflows);
+  const existingCards = Array.from(els.workflowsContainer.querySelectorAll<HTMLElement>('[data-workflow-serial]'));
+  const existingSerials = existingCards.map((c) => c.dataset.workflowSerial!);
+  const isSame = existingSerials.length === currentSerials.length &&
+    existingSerials.every((s, i) => s === currentSerials[i]);
 
-    let rowsHtml = '';
-    TOOL_DEFS.forEach((tool, idx) => {
-      const isSelected = wf.tools.includes(tool.id);
-      const rowState = wf.toolStatus[tool.id];
-      const status: 'STANDBY' | 'RUNNING' | 'PASSED' | 'WARNING' | 'FAILED' = isRunning
-        ? ((rowState?.status as any) || (isSelected ? 'RUNNING' : 'STANDBY'))
-        : ((rowState?.status as any) || 'STANDBY');
-      const subtext = rowState?.subtext || (status === 'RUNNING' ? 'Running automated test...' : tool.desc);
-      const toolUpper = tool.id === 'getprop' ? 'Getprop' : tool.id.toUpperCase();
-      const pda = wf.pda || getDevicePda(wf.serial);
-      const zipName = `${toolUpper}_${pda}.zip`;
+  if (!isSame) {
+    // Rebuild cards only when devices are added or removed
+    let html = '';
+    for (const wf of list) {
+      const isRunning = wf.run !== null;
+      const isBusy = isDeviceTesting(wf.serial) && !isRunning;
+      const isCollapsed = collapsedCardSerials.has(wf.serial);
+      const allChecked = TOOL_DEFS.every((t) => wf.tools.includes(t.id));
+      const activeElapsed = isRunning && wf.run ? Math.max(0, Math.floor((Date.now() - (wf.run.startedAt - clockSkew)) / 1000)) : 0;
+      const activeTimeStr = formatTimeDigital(activeElapsed);
 
-      const resultHtml = status === 'PASSED'
-        ? `<button class="btn-download-sm" onclick="window.downloadFile('${zipName}', '${tool.id}', '${wf.serial}', '${wf.nodeId}', '${pda}', '${wf.model}')">Download</button><span class="badge-res pass">Pass 1</span>`
-        : `<button class="btn-download-sm" disabled>Download</button>`;
+      let rowsHtml = '';
+      TOOL_DEFS.forEach((tool, idx) => {
+        const isSelected = wf.tools.includes(tool.id);
+        const rowState = wf.toolStatus[tool.id];
+        const status: 'STANDBY' | 'RUNNING' | 'PASSED' | 'WARNING' | 'FAILED' = isRunning
+          ? ((rowState?.status as any) || (isSelected ? 'RUNNING' : 'STANDBY'))
+          : ((rowState?.status as any) || 'STANDBY');
+        const subtext = rowState?.subtext || (status === 'RUNNING' ? 'Running automated test...' : tool.desc);
+        const toolUpper = tool.id === 'getprop' ? 'Getprop' : tool.id.toUpperCase();
+        const pda = wf.pda || getDevicePda(wf.serial);
+        const zipName = `${toolUpper}_${pda}.zip`;
 
-      rowsHtml += `
-        <tr>
-          <td style="text-align: center;">
-            <span class="row-num-text">${idx + 1}</span>
-          </td>
-          <td>
-            <div style="display: flex; align-items: center; gap: 10px;">
-              <label class="switch-toggle">
-                <input type="checkbox" class="tool-switch" data-serial="${wf.serial}" data-tool="${tool.id}" ${isSelected ? 'checked' : ''} ${isRunning ? 'disabled' : ''} />
-                <span class="switch-slider"></span>
-              </label>
-              <div>
-                <div class="tc-name-bold">${tool.name}</div>
-                <div class="tc-subdesc">[${tool.id.toUpperCase()}]</div>
+        const resultHtml = status === 'PASSED'
+          ? `<button class="btn-download-sm" onclick="window.downloadFile('${zipName}', '${tool.id}', '${wf.serial}', '${wf.nodeId}', '${pda}', '${wf.model}')">Download</button><span class="badge-res pass">Pass 1</span>`
+          : `<button class="btn-download-sm" disabled>Download</button>`;
+
+        rowsHtml += `
+          <tr>
+            <td style="text-align: center;">
+              <span class="row-num-text">${idx + 1}</span>
+            </td>
+            <td>
+              <div style="display: flex; align-items: center; gap: 10px;">
+                <label class="switch-toggle">
+                  <input type="checkbox" class="tool-switch" data-serial="${wf.serial}" data-tool="${tool.id}" ${isSelected ? 'checked' : ''} ${isRunning ? 'disabled' : ''} />
+                  <span class="switch-slider"></span>
+                </label>
+                <div>
+                  <div class="tc-name-bold">${tool.name}</div>
+                  <div class="tc-subdesc">[${tool.id.toUpperCase()}]</div>
+                </div>
+              </div>
+            </td>
+            <td>
+              <div class="tc-subtests-col" id="subtest_${wf.serial}_${tool.id}">${subtext}</div>
+            </td>
+            <td>
+              <span id="status_${wf.serial}_${tool.id}" class="status-pill ${status.toLowerCase()}">${status}</span>
+            </td>
+            <td>
+              <span id="time_${wf.serial}_${tool.id}" class="time-col">${isRunning && isSelected ? activeTimeStr : '-'}</span>
+            </td>
+            <td>
+              <div id="res_${wf.serial}_${tool.id}">
+                ${resultHtml}
+              </div>
+            </td>
+          </tr>
+        `;
+      });
+
+      const statusPill = isRunning
+        ? `<span class="status-pill running">RUNNING</span>`
+        : isBusy
+        ? `<span class="status-pill warning">BUSY</span>`
+        : `<span class="status-pill ready">READY</span>`;
+
+      html += `
+        <div class="dashboard-card ${isCollapsed ? '' : 'expanded'}" data-workflow-serial="${wf.serial}">
+          <div class="card-main-header" data-card-serial="${wf.serial}">
+            <div class="card-header-left">
+              <svg class="accordion-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+              <h2 class="card-heading">ATM WORKFLOW - ${wf.model || 'Device'}</h2>
+              <span class="pill-pc-id">${wf.nodeId || 'Node'}</span>
+              <span class="serial-mono" style="font-size: 11px; padding: 2px 8px; background: var(--bg-table-header); border: 1px solid var(--border-light); border-radius: var(--radius-pill);">${wf.serial}</span>
+              <span class="pda-subdesc" style="font-size: 11px;">${wf.pda || '-'}</span>
+              ${statusPill}
+            </div>
+
+            <div class="card-header-right">
+              ${
+                isRunning
+                  ? `
+                    <button class="btn btn-danger btn-sm btn-cancel-device" data-serial="${wf.serial}">
+                      <span>Batal</span>
+                    </button>
+                    <button class="btn btn-blue btn-sm running" disabled>
+                      <span>Menjalankan Automasi...</span>
+                    </button>
+                  `
+                  : `
+                    <button class="btn btn-blue btn-sm btn-start-device" data-serial="${wf.serial}" ${wf.tools.length === 0 || isBusy ? 'disabled' : ''} ${isBusy ? 'title="Perangkat sedang sibuk di sesi lain"' : ''}>
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                      <span>Jalankan Automasi</span>
+                    </button>
+                    <button class="btn-icon-danger btn-remove-device" data-serial="${wf.serial}" title="Hapus dari workflow">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                    </button>
+                  `
+              }
+            </div>
+          </div>
+
+          <div class="card-main-body">
+            <div class="sub-accordion-box expanded">
+              <div class="sub-accordion-header" data-toggle-sub="tools">
+                <div class="sub-header-left">
+                  <svg class="accordion-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+                  <span class="sub-heading-text">ATM TEST SUITES</span>
+                </div>
+                <div class="sub-header-right">
+                  <button class="sub-action-link btn-toggle-tools" data-serial="${wf.serial}" ${isRunning ? 'disabled style="opacity:0.5;cursor:not-allowed;"' : ''}>
+                    ${allChecked ? 'Uncheck All' : 'Check All'}
+                  </button>
+                </div>
+              </div>
+
+              <div class="sub-accordion-content">
+                <div class="table-responsive">
+                  <table class="workflow-table">
+                    <thead>
+                      <tr>
+                        <th style="width: 44px; text-align: center;">NO</th>
+                        <th style="width: 240px;">TEST SUITES</th>
+                        <th>TEST DESCRIPTION</th>
+                        <th style="width: 130px;">STATUS</th>
+                        <th style="width: 100px;">RUNTIME</th>
+                        <th style="width: 160px;">RESULT ARCHIVE</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      ${rowsHtml}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </div>
-          </td>
-          <td>
-            <div class="tc-subtests-col" id="subtest_${wf.serial}_${tool.id}">${subtext}</div>
-          </td>
-          <td>
-            <span id="status_${wf.serial}_${tool.id}" class="status-pill ${status.toLowerCase()}">${status}</span>
-          </td>
-          <td>
-            <span id="time_${wf.serial}_${tool.id}" class="time-col">${isRunning && isSelected ? activeTimeStr : '-'}</span>
-          </td>
-          <td>
-            <div id="res_${wf.serial}_${tool.id}">
-              ${resultHtml}
-            </div>
-          </td>
-        </tr>
+          </div>
+        </div>
       `;
-    });
+    }
+    els.workflowsContainer.innerHTML = html;
+  } else {
+    // ponytail: in-place DOM updates without wiping container (eliminates glitch/flicker)
+    for (const wf of list) {
+      const card = els.workflowsContainer.querySelector<HTMLElement>(`[data-workflow-serial="${wf.serial}"]`);
+      if (!card) continue;
 
-    const statusPill = isRunning
-      ? `<span class="status-pill running">RUNNING</span>`
-      : isBusy
-      ? `<span class="status-pill warning">BUSY</span>`
-      : `<span class="status-pill ready">READY</span>`;
+      const isRunning = wf.run !== null;
+      const isBusy = isDeviceTesting(wf.serial) && !isRunning;
+      const allChecked = TOOL_DEFS.every((t) => wf.tools.includes(t.id));
 
-    html += `
-      <div class="dashboard-card ${isCollapsed ? '' : 'expanded'}" data-workflow-serial="${wf.serial}">
-        <div class="card-main-header" data-card-serial="${wf.serial}">
-          <div class="card-header-left">
-            <svg class="accordion-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
-            <h2 class="card-heading">ATM WORKFLOW - ${wf.model || 'Device'}</h2>
-            <span class="pill-pc-id">${wf.nodeId || 'Node'}</span>
-            <span class="serial-mono" style="font-size: 11px; padding: 2px 8px; background: var(--bg-table-header); border: 1px solid var(--border-light); border-radius: var(--radius-pill);">${wf.serial}</span>
-            <span class="pda-subdesc" style="font-size: 11px;">${wf.pda || '-'}</span>
-            ${statusPill}
-          </div>
+      // 1. Update Card Status Pill
+      const cardStatusEl = card.querySelector<HTMLElement>('.card-header-left .status-pill');
+      if (cardStatusEl) {
+        const nextClass = isRunning ? 'status-pill running' : isBusy ? 'status-pill warning' : 'status-pill ready';
+        const nextText = isRunning ? 'RUNNING' : isBusy ? 'BUSY' : 'READY';
+        if (cardStatusEl.className !== nextClass) cardStatusEl.className = nextClass;
+        if (cardStatusEl.textContent !== nextText) cardStatusEl.textContent = nextText;
+      }
 
-          <div class="card-header-right" onclick="event.stopPropagation()">
-            ${
-              isRunning
-                ? `
-                  <button class="btn btn-danger btn-sm btn-cancel-device" data-serial="${wf.serial}">
-                    <span>Batal</span>
-                  </button>
-                  <button class="btn btn-blue btn-sm running" disabled>
-                    <span>Menjalankan Automasi...</span>
-                  </button>
-                `
-                : `
-                  <button class="btn btn-blue btn-sm btn-start-device" data-serial="${wf.serial}" ${wf.tools.length === 0 || isBusy ? 'disabled' : ''} ${isBusy ? 'title="Perangkat sedang sibuk di sesi lain"' : ''}>
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-                    <span>Jalankan Automasi</span>
-                  </button>
-                  <button class="btn-icon-danger btn-remove-device" data-serial="${wf.serial}" title="Hapus dari workflow">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-                  </button>
-                `
-            }
-          </div>
-        </div>
+      // 2. Update Header Actions
+      const headerRight = card.querySelector<HTMLElement>('.card-header-right');
+      if (headerRight) {
+        const wasRunning = headerRight.querySelector('.btn-cancel-device') !== null;
+        if (isRunning !== wasRunning) {
+          headerRight.innerHTML = isRunning
+            ? `
+              <button class="btn btn-danger btn-sm btn-cancel-device" data-serial="${wf.serial}">
+                <span>Batal</span>
+              </button>
+              <button class="btn btn-blue btn-sm running" disabled>
+                <span>Menjalankan Automasi...</span>
+              </button>
+            `
+            : `
+              <button class="btn btn-blue btn-sm btn-start-device" data-serial="${wf.serial}" ${wf.tools.length === 0 || isBusy ? 'disabled' : ''} ${isBusy ? 'title="Perangkat sedang sibuk di sesi lain"' : ''}>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                <span>Jalankan Automasi</span>
+              </button>
+              <button class="btn-icon-danger btn-remove-device" data-serial="${wf.serial}" title="Hapus dari workflow">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+              </button>
+            `;
+        } else if (!isRunning) {
+          const startBtn = headerRight.querySelector<HTMLButtonElement>('.btn-start-device');
+          if (startBtn) {
+            startBtn.disabled = wf.tools.length === 0 || isBusy;
+          }
+        }
+      }
 
-        <div class="card-main-body">
-          <div class="sub-accordion-box expanded">
-            <div class="sub-accordion-header" data-toggle-sub="tools">
-              <div class="sub-header-left">
-                <svg class="accordion-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
-                <span class="sub-heading-text">ATM TEST SUITES</span>
-              </div>
-              <div class="sub-header-right" onclick="event.stopPropagation()">
-                <button class="sub-action-link btn-toggle-tools" data-serial="${wf.serial}" ${isRunning ? 'disabled style="opacity:0.5;cursor:not-allowed;"' : ''}>
-                  ${allChecked ? 'Uncheck All' : 'Check All'}
-                </button>
-              </div>
-            </div>
+      // 3. Update Check/Uncheck button
+      const btnToggle = card.querySelector<HTMLButtonElement>('.btn-toggle-tools');
+      if (btnToggle) {
+        const nextText = allChecked ? 'Uncheck All' : 'Check All';
+        if (btnToggle.textContent?.trim() !== nextText) btnToggle.textContent = nextText;
+        btnToggle.disabled = isRunning;
+        btnToggle.style.opacity = isRunning ? '0.5' : '1';
+        btnToggle.style.cursor = isRunning ? 'not-allowed' : 'pointer';
+      }
 
-            <div class="sub-accordion-content">
-              <div class="table-responsive">
-                <table class="workflow-table">
-                  <thead>
-                    <tr>
-                      <th style="width: 44px; text-align: center;">NO</th>
-                      <th style="width: 240px;">TEST SUITES</th>
-                      <th>TEST DESCRIPTION</th>
-                      <th style="width: 130px;">STATUS</th>
-                      <th style="width: 100px;">RUNTIME</th>
-                      <th style="width: 160px;">RESULT ARCHIVE</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    ${rowsHtml}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    `;
+      // 4. Update Switches and Tool Rows
+      for (const tool of TOOL_DEFS) {
+        const isSelected = wf.tools.includes(tool.id);
+        const rowState = wf.toolStatus[tool.id];
+        const status: 'STANDBY' | 'RUNNING' | 'PASSED' | 'WARNING' | 'FAILED' = isRunning
+          ? ((rowState?.status as any) || (isSelected ? 'RUNNING' : 'STANDBY'))
+          : ((rowState?.status as any) || 'STANDBY');
+        const subtext = rowState?.subtext || (status === 'RUNNING' ? 'Running automated test...' : tool.desc);
+
+        const sw = card.querySelector<HTMLInputElement>(`.tool-switch[data-tool="${tool.id}"]`);
+        if (sw) {
+          if (sw.checked !== isSelected) sw.checked = isSelected;
+          sw.disabled = isRunning;
+        }
+
+        const subtextEl = document.getElementById(`subtest_${wf.serial}_${tool.id}`);
+        if (subtextEl && subtextEl.textContent !== subtext) {
+          subtextEl.textContent = subtext;
+        }
+
+        const statusEl = document.getElementById(`status_${wf.serial}_${tool.id}`);
+        if (statusEl) {
+          const sClass = `status-pill ${status.toLowerCase()}`;
+          if (statusEl.className !== sClass) statusEl.className = sClass;
+          if (statusEl.textContent !== status) statusEl.textContent = status;
+        }
+
+        const resEl = document.getElementById(`res_${wf.serial}_${tool.id}`);
+        if (resEl) {
+          const pda = wf.pda || getDevicePda(wf.serial);
+          const toolUpper = tool.id === 'getprop' ? 'Getprop' : tool.id.toUpperCase();
+          const zipName = `${toolUpper}_${pda}.zip`;
+          const expectedHtml = status === 'PASSED'
+            ? `<button class="btn-download-sm" onclick="window.downloadFile('${zipName}', '${tool.id}', '${wf.serial}', '${wf.nodeId}', '${pda}', '${wf.model}')">Download</button><span class="badge-res pass">Pass 1</span>`
+            : `<button class="btn-download-sm" disabled>Download</button>`;
+          if (resEl.innerHTML.trim() !== expectedHtml.trim()) {
+            resEl.innerHTML = expectedHtml;
+          }
+        }
+      }
+    }
   }
 
-  els.workflowsContainer.innerHTML = html;
   ensureRuntimeInterval();
 }
 
@@ -1035,7 +1146,52 @@ function setupEventListeners() {
   els.workflowsContainer.addEventListener('click', (e) => {
     const target = e.target as HTMLElement;
 
-    // Toggle Card Accordion
+    // 1. Toggle Tools (Check/Uncheck All for device)
+    const toggleToolsBtn = target.closest<HTMLButtonElement>('.btn-toggle-tools');
+    if (toggleToolsBtn && toggleToolsBtn.dataset.serial) {
+      const serial = toggleToolsBtn.dataset.serial;
+      const wf = workflows[serial];
+      if (wf && !wf.run) {
+        const allChecked = TOOL_DEFS.every((t) => wf.tools.includes(t.id));
+        const tools = allChecked ? [] : TOOL_DEFS.map((t) => t.id);
+        // ponytail: immediate local feedback
+        wf.tools = tools;
+        renderWorkflows();
+        sendToHub({ type: 'SET_TOOLS', payload: { serial, tools } });
+      }
+      return;
+    }
+
+    // 2. Start Device Run
+    const startBtn = target.closest<HTMLButtonElement>('.btn-start-device');
+    if (startBtn && startBtn.dataset.serial) {
+      sendToHub({ type: 'START_RUN', payload: { serial: startBtn.dataset.serial } });
+      return;
+    }
+
+    // 3. Cancel Device Run
+    const cancelBtn = target.closest<HTMLButtonElement>('.btn-cancel-device');
+    if (cancelBtn && cancelBtn.dataset.serial) {
+      sendToHub({ type: 'CANCEL_RUN', payload: { serial: cancelBtn.dataset.serial } });
+      return;
+    }
+
+    // 4. Remove Device from Workflow
+    const removeBtn = target.closest<HTMLButtonElement>('.btn-remove-device');
+    if (removeBtn && removeBtn.dataset.serial) {
+      sendToHub({ type: 'WORKFLOW_REMOVE', payload: { serial: removeBtn.dataset.serial } });
+      return;
+    }
+
+    // 5. Toggle Sub-Accordion (Test Suites)
+    const subHeader = target.closest<HTMLElement>('.sub-accordion-header');
+    if (subHeader && !target.closest('.sub-header-right')) {
+      const box = subHeader.closest<HTMLElement>('.sub-accordion-box');
+      if (box) box.classList.toggle('expanded');
+      return;
+    }
+
+    // 6. Toggle Card Accordion
     const cardHeader = target.closest<HTMLElement>('.card-main-header[data-card-serial]');
     if (cardHeader && !target.closest('.card-header-right')) {
       const serial = cardHeader.dataset.cardSerial!;
@@ -1048,48 +1204,6 @@ function setupEventListeners() {
           card.classList.add('expanded');
           collapsedCardSerials.delete(serial);
         }
-      }
-      return;
-    }
-
-    // Toggle Sub-Accordion (Test Suites)
-    const subHeader = target.closest<HTMLElement>('.sub-accordion-header');
-    if (subHeader && !target.closest('.sub-header-right')) {
-      const box = subHeader.closest<HTMLElement>('.sub-accordion-box');
-      if (box) box.classList.toggle('expanded');
-      return;
-    }
-
-    // Start Device Run
-    const startBtn = target.closest<HTMLButtonElement>('.btn-start-device');
-    if (startBtn && startBtn.dataset.serial) {
-      sendToHub({ type: 'START_RUN', payload: { serial: startBtn.dataset.serial } });
-      return;
-    }
-
-    // Cancel Device Run
-    const cancelBtn = target.closest<HTMLButtonElement>('.btn-cancel-device');
-    if (cancelBtn && cancelBtn.dataset.serial) {
-      sendToHub({ type: 'CANCEL_RUN', payload: { serial: cancelBtn.dataset.serial } });
-      return;
-    }
-
-    // Remove Device from Workflow
-    const removeBtn = target.closest<HTMLButtonElement>('.btn-remove-device');
-    if (removeBtn && removeBtn.dataset.serial) {
-      sendToHub({ type: 'WORKFLOW_REMOVE', payload: { serial: removeBtn.dataset.serial } });
-      return;
-    }
-
-    // Toggle Tools (Check/Uncheck All for device)
-    const toggleToolsBtn = target.closest<HTMLButtonElement>('.btn-toggle-tools');
-    if (toggleToolsBtn && toggleToolsBtn.dataset.serial) {
-      const serial = toggleToolsBtn.dataset.serial;
-      const wf = workflows[serial];
-      if (wf) {
-        const allChecked = TOOL_DEFS.every((t) => wf.tools.includes(t.id));
-        const tools = allChecked ? [] : TOOL_DEFS.map((t) => t.id);
-        sendToHub({ type: 'SET_TOOLS', payload: { serial, tools } });
       }
       return;
     }
@@ -1106,6 +1220,16 @@ function setupEventListeners() {
       const checkedTools = Array.from(card.querySelectorAll<HTMLInputElement>('.tool-switch:checked')).map(
         (sw) => sw.dataset.tool!
       );
+      // ponytail: update state locally immediately for zero-glitch UI
+      if (workflows[serial]) {
+        workflows[serial].tools = checkedTools;
+      }
+      const allChecked = TOOL_DEFS.every((t) => checkedTools.includes(t.id));
+      const btnToggle = card.querySelector<HTMLElement>('.btn-toggle-tools');
+      if (btnToggle) btnToggle.textContent = allChecked ? 'Uncheck All' : 'Check All';
+      const startBtn = card.querySelector<HTMLButtonElement>('.btn-start-device');
+      if (startBtn) startBtn.disabled = checkedTools.length === 0 || isDeviceTesting(serial);
+
       sendToHub({ type: 'SET_TOOLS', payload: { serial, tools: checkedTools } });
     }
   });
