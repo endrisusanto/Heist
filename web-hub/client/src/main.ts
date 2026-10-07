@@ -680,7 +680,7 @@ function renderHistory() {
         <td>
           ${
             isFinished
-              ? `<a href="#" class="archive-pill-link" onclick="alert('Download archive ${item.archiveName}'); return false;">📦 ${item.archiveName}</a>`
+              ? `<a href="#" class="archive-pill-link" onclick="alert('Download archive ${item.archiveName}'); return false;">${item.archiveName}</a>`
               : `<span style="color: var(--text-muted); font-size: 10.5px;">No Zip</span>`
           }
         </td>
