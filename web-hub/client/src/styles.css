@@ -218,12 +218,14 @@ html, body {
   gap: 6px;
   background: var(--bg-card);
   border: 1px solid var(--border-card);
-  padding: 4px 12px;
+  height: 28px;
+  padding: 0 12px;
   border-radius: var(--radius-pill);
   font-size: 11px;
   color: var(--text-muted);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
   white-space: nowrap;
+  box-sizing: border-box;
 }
 
 .stat-pill-tag strong {
@@ -237,13 +239,15 @@ html, body {
   gap: 6px;
   background: var(--bg-card);
   border: 1px solid var(--border-card);
-  padding: 4px 12px;
+  height: 28px;
+  padding: 0 12px;
   border-radius: var(--radius-pill);
   font-size: 11px;
   color: var(--text-heading);
   cursor: pointer;
   font-weight: 600;
   white-space: nowrap;
+  box-sizing: border-box;
 }
 
 .stat-pill-btn:hover {
@@ -262,8 +266,8 @@ html, body {
 }
 
 .icon-circle-btn {
-  width: 30px;
-  height: 30px;
+  width: 28px;
+  height: 28px;
   border-radius: 50%;
   border: 1px solid var(--border-card);
   background: var(--bg-card);
@@ -273,6 +277,7 @@ html, body {
   justify-content: center;
   cursor: pointer;
   flex-shrink: 0;
+  box-sizing: border-box;
   transition: all 0.2s ease;
 }
 
@@ -628,6 +633,22 @@ html, body {
   position: relative;
   overflow: hidden;
   cursor: default;
+  font-weight: 700 !important;
+  opacity: 1 !important;
+}
+
+[data-theme="dark"] .btn-blue.running {
+  color: #60a5fa !important;
+  border-color: #3b82f6 !important;
+  background-color: rgba(37, 99, 235, 0.15) !important;
+  opacity: 1 !important;
+}
+
+.btn-blue.running span,
+.btn-blue.running svg {
+  color: inherit !important;
+  opacity: 1 !important;
+  font-weight: 700 !important;
 }
 
 .btn-blue.running::after {
@@ -678,6 +699,20 @@ html, body {
 .btn-green-sm:hover:not(:disabled) {
   background-color: #059669;
   box-shadow: 0 2px 5px rgba(16, 185, 129, 0.2);
+}
+
+.btn-green-sm:disabled {
+  background-color: #059669 !important;
+  color: #ffffff !important;
+  opacity: 1 !important;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+[data-theme="dark"] .btn-green-sm:disabled {
+  background-color: #047857 !important;
+  color: #ffffff !important;
+  opacity: 1 !important;
 }
 
 .btn-danger {
@@ -738,7 +773,7 @@ html, body {
   transform: scale(0.95);
 }
 
-.btn:disabled, .btn-green-sm:disabled {
+.btn:disabled:not(.btn-green-sm):not(.btn-blue.running) {
   opacity: 0.5;
   cursor: not-allowed;
 }
@@ -1739,6 +1774,18 @@ input:checked + .switch-slider:before {
     justify-content: center;
     font-size: 11.5px;
     font-weight: 700;
+  }
+
+  #cancelAutomationBtn {
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    flex: 0 0 36px !important;
+    justify-content: center;
+  }
+
+  #cancelAutomationBtn span {
+    display: none;
   }
 
   .card-header-right .btn-icon-danger {
