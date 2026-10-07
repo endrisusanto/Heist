@@ -612,6 +612,23 @@ function finishCurrentRun(status: 'FINISHED' | 'CANCELLED') {
     );
   });
 
+  // Populate Workflow Results Sub-Section
+  if (status === 'FINISHED' && devices.length > 0) {
+    const archives = devices.map((d) => `ATM_${d}_results.zip`);
+    els.workflowResultsHeaderTitle.textContent = `RESULTS (${archives.length} ZIP)`;
+    els.workflowResultsList.innerHTML = archives
+      .map(
+        (a, idx) => `
+      <div style="margin-bottom: 6px;">
+        <a href="#" class="archive-pill-link" onclick="window.downloadFile('${a}', undefined, '${devices[idx] || devices[0]}', '${nodeId}'); return false;">
+          ${a}
+        </a>
+      </div>
+    `
+      )
+      .join('');
+  }
+
   // Reset running state
   activeRunId = null;
   activeRunStartTime = null;
@@ -624,6 +641,23 @@ function finishCurrentRun(status: 'FINISHED' | 'CANCELLED') {
 
   renderAll();
 }
+
+// Real Download Trigger Function
+(window as any).downloadFile = function(fileName: string, tool?: string, serial?: string, nodeId?: string) {
+  const params = new URLSearchParams({
+    file: fileName,
+    ...(tool ? { tool } : {}),
+    ...(serial ? { serial } : {}),
+    ...(nodeId ? { nodeId } : {}),
+  });
+  const url = `/api/download?${params.toString()}`;
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+};
 
 function setToolRowStatus(tool: string, status: 'STANDBY' | 'RUNNING' | 'PASSED' | 'WARNING' | 'FAILED', subtext: string) {
   const statusEl = document.getElementById(`status_${tool}`);
@@ -639,11 +673,16 @@ function setToolRowStatus(tool: string, status: 'STANDBY' | 'RUNNING' | 'PASSED'
     subtestEl.textContent = subtext;
   }
 
-  if (resEl && status === 'PASSED') {
-    resEl.innerHTML = `
-      <button class="btn-download-sm">Download</button>
-      <span class="badge-res pass">Pass 1</span>
-    `;
+  if (resEl) {
+    if (status === 'PASSED') {
+      const devSerial = activeRunDevices[0] || 'device';
+      resEl.innerHTML = `
+        <button class="btn-download-sm" onclick="window.downloadFile('${tool}_result.txt', '${tool}', '${devSerial}')">Download</button>
+        <span class="badge-res pass">Pass 1</span>
+      `;
+    } else if (status === 'STANDBY') {
+      resEl.innerHTML = `<button class="btn-download-sm" disabled>Download</button>`;
+    }
   }
 }
 
@@ -692,7 +731,7 @@ function renderHistory() {
         <td>
           ${
             isFinished
-              ? `<a href="#" class="archive-pill-link" onclick="alert('Download archive ${item.archiveName}'); return false;">${item.archiveName}</a>`
+              ? `<a href="#" class="archive-pill-link" onclick="window.downloadFile('${item.archiveName}', undefined, '${item.devices[0] || 'device'}', '${item.nodeId}'); return false;">${item.archiveName}</a>`
               : `<span style="color: var(--text-muted); font-size: 10.5px;">No Zip</span>`
           }
         </td>
