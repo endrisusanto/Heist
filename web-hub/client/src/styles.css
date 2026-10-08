@@ -465,12 +465,35 @@ html, body {
   width: 100%;
 }
 
+@media (min-width: 1280px) {
+  .workflows-container {
+    column-count: 2;
+    column-gap: 16px;
+    display: block;
+  }
+
+  .workflows-container > .dashboard-card {
+    break-inside: avoid;
+    page-break-inside: avoid;
+    -webkit-column-break-inside: avoid;
+    margin-bottom: 16px;
+    width: 100%;
+    display: inline-block;
+    vertical-align: top;
+  }
+
+  .workflows-container > .dashboard-card:only-child {
+    column-span: all;
+  }
+}
+
 .dashboard-card {
   background: var(--bg-card);
   border: 1px solid var(--border-card);
   border-radius: var(--radius-card);
   box-shadow: var(--shadow-card);
   overflow: hidden;
+  min-width: 0;
 }
 
 .card-main-header {
@@ -1991,6 +2014,11 @@ input:checked + .switch-slider:before {
 
 /* History Mode Chips */
 .history-mode-cell {
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.history-mode-chips {
   display: inline-flex;
   flex-wrap: nowrap;
   gap: 4px;

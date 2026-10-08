@@ -1185,7 +1185,7 @@ function renderHistory() {
       <tr data-history-id="${item.id}">
         <td><span class="timestamp-text">${formatTimestamp(item.timestamp)}</span></td>
         <td><span class="pill-pc-id">${item.nodeId}</span></td>
-        <td class="history-mode-cell">${formatModeChips(item.mode)}</td>
+        <td class="history-mode-cell"><div class="history-mode-chips">${formatModeChips(item.mode)}</div></td>
         <td><span class="pill-pc-id">${item.devices[0] || 'device'}</span></td>
         <td class="time-col">${formatDuration(item.runtimeSecs)}</td>
         <td><span class="count-pill-sm ${item.passed > 0 ? 'green' : 'gray'}">${item.passed}</span></td>
