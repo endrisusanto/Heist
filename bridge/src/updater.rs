@@ -1,3 +1,5 @@
+#[allow(unused_imports)]
+use crate::types::CommandHiddenExt;
 use std::env;
 use std::path::PathBuf;
 use std::process::Command;
@@ -34,7 +36,9 @@ pub fn download_file(url: &str, dest: &PathBuf) -> Result<(), String> {
     #[cfg(windows)]
     {
         // Try curl.exe first (available on Win 10/11), fallback to PowerShell
-        let curl_res = Command::new("curl.exe")
+        let mut curl_cmd = Command::new("curl.exe");
+        curl_cmd.hide_window();
+        let curl_res = curl_cmd
             .args(["-fsSL", "-o", &dest.to_string_lossy(), url])
             .status();
 
@@ -46,7 +50,9 @@ pub fn download_file(url: &str, dest: &PathBuf) -> Result<(), String> {
                     url,
                     dest.to_string_lossy()
                 );
-                let status = Command::new("powershell")
+                let mut ps = Command::new("powershell");
+                ps.hide_window();
+                let status = ps
                     .args(["-NoProfile", "-Command", &ps_cmd])
                     .status()
                     .map_err(|e| format!("PowerShell download failed: {e}"))?;
@@ -148,7 +154,9 @@ pub fn apply_silent_update_and_restart(file_path: &PathBuf) -> Result<(), String
             current_exe.to_string_lossy()
         );
 
-        Command::new("cmd")
+        let mut installer_cmd = Command::new("cmd");
+        installer_cmd.hide_window();
+        installer_cmd
             .args(["/C", &cmd])
             .spawn()
             .map_err(|e| format!("Failed to spawn Windows installer: {e}"))?;

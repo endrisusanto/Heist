@@ -1,4 +1,4 @@
-use crate::types::DeviceInfo;
+use crate::types::{CommandHiddenExt, DeviceInfo};
 use std::collections::HashMap;
 use std::env;
 use std::io::Read;
@@ -57,6 +57,7 @@ pub fn list_devices() -> Result<Vec<DeviceInfo>, String> {
     let output = match run_output_with_timeout(
         {
             let mut c = Command::new(&adb);
+            c.hide_window();
             c.args(["devices", "-l"]);
             c
         },
@@ -166,6 +167,7 @@ pub fn list_devices() -> Result<Vec<DeviceInfo>, String> {
                         ];
                         for prop in candidate_props {
                             let mut cmd = Command::new(&adb_clone);
+                            cmd.hide_window();
                             cmd.args(["-s", &serial, "shell", "getprop", prop]);
                             if let Ok(val) = run_output_with_timeout(cmd, Duration::from_millis(800)) {
                                 let clean_val = val.trim().to_string();
@@ -235,6 +237,7 @@ pub fn list_devices() -> Result<Vec<DeviceInfo>, String> {
 
 fn adb_props(adb: &str, serial: &str) -> Result<HashMap<String, String>, String> {
     let mut cmd = Command::new(adb);
+    cmd.hide_window();
     cmd.args(["-s", serial, "shell", "getprop"]);
     let output = run_output_with_timeout(cmd, Duration::from_secs(4))?;
     let mut map = HashMap::new();
@@ -310,6 +313,7 @@ pub fn set_device_lamp(serial: &str, state: bool) -> Result<(), String> {
     let adb = adb_path();
     let val = if state { "1" } else { "0" };
     let mut cmd = Command::new(&adb);
+    cmd.hide_window();
     cmd.args(["-s", serial, "shell", "cmd", "flashlight", val]);
     let _ = run_output_with_timeout(cmd, Duration::from_secs(3));
     Ok(())
@@ -318,6 +322,7 @@ pub fn set_device_lamp(serial: &str, state: bool) -> Result<(), String> {
 pub fn press_device_home(serial: &str) -> Result<(), String> {
     let adb = adb_path();
     let mut cmd = Command::new(&adb);
+    cmd.hide_window();
     cmd.args(["-s", serial, "shell", "input", "keyevent", "3"]);
     let _ = run_output_with_timeout(cmd, Duration::from_secs(3));
     Ok(())
@@ -326,6 +331,7 @@ pub fn press_device_home(serial: &str) -> Result<(), String> {
 pub fn clear_device_results(serial: &str, atm_root: &Path) -> Result<String, String> {
     let adb = adb_path();
     let mut cmd = Command::new(&adb);
+    cmd.hide_window();
     cmd.args(["-s", serial, "shell", "getprop", "ro.product.model"]);
     let model = run_output_with_timeout(cmd, Duration::from_secs(3))
         .unwrap_or_else(|_| "UNKNOWN".to_string())

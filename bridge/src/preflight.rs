@@ -1,3 +1,5 @@
+#[allow(unused_imports)]
+use crate::types::CommandHiddenExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -13,7 +15,7 @@ pub fn check_preflight(root_path: &str) -> Vec<String> {
     lines.push(format!("[+] Root directory OK: {}", root.display()));
 
     // Check Java
-    let java_check = Command::new(java_bin()).arg("-version").output();
+    let java_check = Command::new(java_bin()).hide_window().arg("-version").output();
     match java_check {
         Ok(out) => {
             let ver = String::from_utf8_lossy(&out.stderr);
@@ -26,7 +28,7 @@ pub fn check_preflight(root_path: &str) -> Vec<String> {
     }
 
     // Check ADB
-    let adb_check = Command::new(crate::scanner::adb_path()).arg("version").output();
+    let adb_check = Command::new(crate::scanner::adb_path()).hide_window().arg("version").output();
     match adb_check {
         Ok(out) => {
             let ver = String::from_utf8_lossy(&out.stdout);

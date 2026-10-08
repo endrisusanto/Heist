@@ -157,3 +157,25 @@ pub enum HubToBridgeMessage {
     },
     Ping,
 }
+
+pub trait CommandHiddenExt {
+    fn hide_window(&mut self) -> &mut Self;
+}
+
+impl CommandHiddenExt for std::process::Command {
+    fn hide_window(&mut self) -> &mut Self {
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            self.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
+        self
+    }
+}
+
+#[allow(dead_code)]
+pub fn new_hidden_command<S: AsRef<std::ffi::OsStr>>(program: S) -> std::process::Command {
+    let mut cmd = std::process::Command::new(program);
+    cmd.hide_window();
+    cmd
+}

@@ -1,5 +1,5 @@
 use crate::preflight::java_bin;
-use crate::types::{RunFinished, RunRequest};
+use crate::types::{CommandHiddenExt, RunFinished, RunRequest};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -138,6 +138,7 @@ where
         );
 
         let mut command = Command::new(&java);
+        command.hide_window();
         command
             .current_dir(&root_buf)
             .args(&args)
@@ -229,6 +230,7 @@ pub fn run_atm_agent_update(atm_root_path: &str) -> Result<String, String> {
     }
     let java = java_bin();
     let mut cmd = Command::new(java);
+    cmd.hide_window();
     cmd.current_dir(root)
         .args(["-jar", &agent_jar.to_string_lossy(), "update"])
         .stdout(Stdio::piped())
@@ -252,8 +254,8 @@ fn kill_process_tree(pid: u32) {
     }
     #[cfg(windows)]
     {
-        let _ = Command::new("taskkill")
-            .args(["/PID", &pid.to_string(), "/T", "/F"])
-            .output();
+        let mut cmd = Command::new("taskkill");
+        cmd.hide_window();
+        let _ = cmd.args(["/PID", &pid.to_string(), "/T", "/F"]).output();
     }
 }
