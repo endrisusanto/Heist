@@ -1123,64 +1123,94 @@ public class AtmBatchLauncher {
                     }
                 }
 
-                List<String> targetMethods = new ArrayList<>();
+                List<String> subtests = new ArrayList<>();
                 if (cliCtsvSubtests != null && !cliCtsvSubtests.isBlank()) {
                     for (String sub : cliCtsvSubtests.split(",")) {
                         String trimmed = sub.trim();
                         if (!trimmed.isEmpty()) {
-                            targetMethods.add("com.example.autoctsver.ExampleInstrumentedTest#" + trimmed);
+                            subtests.add(trimmed);
                         }
                     }
                 }
-                if (targetMethods.isEmpty()) {
-                    targetMethods.add("com.example.autoctsver.ExampleInstrumentedTest#DeviceOwnerTestsNormal");
-                    targetMethods.add("com.example.autoctsver.ExampleInstrumentedTest#BYODManagedProvisioningNormal");
+                if (subtests.isEmpty()) {
+                    subtests.add("DeviceOwnerTestsNormal");
+                    subtests.add("BYODManagedProvisioningNormal");
                 }
 
-                List<String> instCmd = new ArrayList<>(Arrays.asList(
-                    cliAdbPath, "-s", device.serial, "shell", "am", "instrument", "-w", "-r",
-                    "-e", "class", String.join(",", targetMethods),
-                    runner
-                ));
-                log.accept("[CTSV] Running am instrument: " + String.join(" ", instCmd));
+                int overallExitCode = 0;
+                for (String sub : subtests) {
+                    if (cliCancelRequested) break;
+                    String fullTarget = sub.contains("#") ? sub : ("com.example.autoctsver.ExampleInstrumentedTest#" + sub);
+                    log.accept("[CTSV] Preparing subtest: " + sub);
 
-                ProcessBuilder pb = new ProcessBuilder(instCmd);
-                pb.directory(ROOT.toFile());
-                pb.redirectErrorStream(true);
-                if (env != null) pb.environment().putAll(env);
-                Process process = pb.start();
-                cliRunningProcesses.add(process);
+                    // Subtest-specific pre-configuration
+                    if (sub.contains("DeviceOwner")) {
+                        cleanupDeviceAdmin(device.serial);
+                        log.accept("[CTSV] Configuring Device Owner for " + sub + "...");
+                        staticRunCommand(Arrays.asList(cliAdbPath, "-s", device.serial, "shell", "dpm", "set-device-owner", "--user", "0", "com.android.cts.emptydeviceowner/.EmptyDeviceAdmin"), ROOT, null, Duration.ofSeconds(5));
+                        staticRunCommand(Arrays.asList(cliAdbPath, "-s", device.serial, "shell", "dpm", "set-device-owner", "com.android.cts.emptydeviceowner/.EmptyDeviceAdminReceiver"), ROOT, null, Duration.ofSeconds(5));
+                    } else if (sub.contains("BYOD") || sub.contains("ManagedProvisioning")) {
+                        log.accept("[CTSV] Ensuring clean profile state for BYOD provisioning (removing device owners & old profiles)...");
+                        cleanupDeviceAdmin(device.serial);
+                        removeNonOwnerUsers(device.serial, log);
+                        staticRunCommand(Arrays.asList(cliAdbPath, "-s", device.serial, "shell", "wm", "dismiss-keyguard"), ROOT, null, Duration.ofSeconds(5));
+                        staticRunCommand(Arrays.asList(cliAdbPath, "-s", device.serial, "shell", "input", "keyevent", "82"), ROOT, null, Duration.ofSeconds(5));
+                    }
 
-                ExecutorService pump = Executors.newSingleThreadExecutor();
-                Future<?> readerFuture = pump.submit(() -> {
-                    try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
-                        String line;
-                        while ((line = reader.readLine()) != null) {
-                            String trimmed = line.trim();
-                            if (!trimmed.isEmpty()) {
-                                log.accept("[CTSV] " + trimmed);
+                    List<String> instCmd = new ArrayList<>(Arrays.asList(
+                        cliAdbPath, "-s", device.serial, "shell", "am", "instrument", "-w", "-r",
+                        "-e", "class", fullTarget,
+                        runner
+                    ));
+                    log.accept("[CTSV] Running am instrument: " + String.join(" ", instCmd));
+
+                    ProcessBuilder pb = new ProcessBuilder(instCmd);
+                    pb.directory(ROOT.toFile());
+                    pb.redirectErrorStream(true);
+                    if (env != null) pb.environment().putAll(env);
+                    Process process = pb.start();
+                    cliRunningProcesses.add(process);
+
+                    ExecutorService pump = Executors.newSingleThreadExecutor();
+                    Future<?> readerFuture = pump.submit(() -> {
+                        try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+                            String line;
+                            while ((line = reader.readLine()) != null) {
+                                String trimmed = line.trim();
+                                if (!trimmed.isEmpty()) {
+                                    log.accept("[CTSV] " + trimmed);
+                                }
                             }
-                        }
-                    } catch (IOException ignored) {}
-                });
+                        } catch (IOException ignored) {}
+                    });
 
-                long deadline = System.nanoTime() + Duration.ofMinutes(15).toNanos();
-                while (!cliCancelRequested && System.nanoTime() < deadline) {
-                    if (process.waitFor(250, TimeUnit.MILLISECONDS)) break;
-                }
-                if (process.isAlive()) {
-                    if (cliCancelRequested) {
-                        process.destroy();
-                        if (!process.waitFor(2, TimeUnit.SECONDS)) process.destroyForcibly();
-                    } else {
-                        timedOut = true;
-                        process.destroyForcibly();
+                    long deadline = System.nanoTime() + Duration.ofMinutes(15).toNanos();
+                    while (!cliCancelRequested && System.nanoTime() < deadline) {
+                        if (process.waitFor(250, TimeUnit.MILLISECONDS)) break;
+                    }
+                    if (process.isAlive()) {
+                        if (cliCancelRequested) {
+                            process.destroy();
+                            if (!process.waitFor(2, TimeUnit.SECONDS)) process.destroyForcibly();
+                        } else {
+                            timedOut = true;
+                            process.destroyForcibly();
+                        }
+                    }
+                    int code = process.waitFor();
+                    if (code != 0) overallExitCode = code;
+                    try { readerFuture.get(2, TimeUnit.SECONDS); } catch (Exception ignored) {}
+                    pump.shutdownNow();
+                    cliRunningProcesses.remove(process);
+
+                    // Subtest-specific post-cleanup
+                    if (sub.contains("DeviceOwner")) {
+                        cleanupDeviceAdmin(device.serial);
+                    } else if (sub.contains("BYOD") || sub.contains("ManagedProvisioning")) {
+                        removeNonOwnerUsers(device.serial, log);
                     }
                 }
-                exitCode = process.waitFor();
-                try { readerFuture.get(2, TimeUnit.SECONDS); } catch (Exception ignored) {}
-                pump.shutdownNow();
-                cliRunningProcesses.remove(process);
+                exitCode = overallExitCode;
             }
 
             // 7. Trigger Export on Device & Pull Reports to results/<model>/<pda>/CTSVerifier/
@@ -1313,24 +1343,69 @@ public class AtmBatchLauncher {
         return null;
     }
 
+    private static void removeNonOwnerUsers(String serial, Consumer<String> log) {
+        try {
+            CommandResult res = staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "pm", "list", "users"), ROOT, null, Duration.ofSeconds(10));
+            Matcher m = Pattern.compile("UserInfo\\{(\\d+):").matcher(res.output);
+            while (m.find()) {
+                int userId = Integer.parseInt(m.group(1));
+                if (userId != 0) {
+                    if (log != null) log.accept("[CTSV] Removing non-owner/managed profile user " + userId + "...");
+                    staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "pm", "remove-user", String.valueOf(userId)), ROOT, null, Duration.ofSeconds(10));
+                }
+            }
+        } catch (Exception ignored) {}
+    }
+
     private static void grantCtsVerifierPermissions(String serial, Consumer<String> log) {
         log.accept("[CTSV] Configuring CTS-Verifier permissions and appops...");
+        // Global & Secure settings setup for automation & BYOD provisioning
+        staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "settings", "put", "global", "device_provisioned", "1"), ROOT, null, Duration.ofSeconds(5));
+        staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "settings", "put", "secure", "user_setup_complete", "1"), ROOT, null, Duration.ofSeconds(5));
+        staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "settings", "put", "global", "verifier_verify_adb_installs", "0"), ROOT, null, Duration.ofSeconds(5));
+        staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "settings", "put", "global", "package_verifier_enable", "0"), ROOT, null, Duration.ofSeconds(5));
+        staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "settings", "put", "global", "package_verifier_user_consent", "-1"), ROOT, null, Duration.ofSeconds(5));
+        staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "settings", "put", "secure", "install_non_market_apps", "1"), ROOT, null, Duration.ofSeconds(5));
+        staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "settings", "put", "global", "stay_on_while_plugged_in", "7"), ROOT, null, Duration.ofSeconds(5));
+        staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "settings", "put", "secure", "lockscreen.disabled", "1"), ROOT, null, Duration.ofSeconds(5));
+        staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "settings", "put", "global", "hidden_api_policy", "1"), ROOT, null, Duration.ofSeconds(5));
+        staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "wm", "dismiss-keyguard"), ROOT, null, Duration.ofSeconds(5));
+
+        // Enable Accessibility & Notification listener for AutoCTSVer
+        staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "settings", "put", "secure", "accessibility_enabled", "1"), ROOT, null, Duration.ofSeconds(5));
+        staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "settings", "put", "secure", "enabled_accessibility_services", "com.example.autoctsver/com.example.autoctsver.AutoService:com.example.autoctsver/.AutoService:com.example.autoctsver/com.example.autoctsver.AccessibilityService"), ROOT, null, Duration.ofSeconds(5));
+        staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "cmd", "notification", "allow_listener", "com.android.cts.verifier/com.android.cts.verifier.notifications.MockListener"), ROOT, null, Duration.ofSeconds(5));
+        staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "cmd", "notification", "allow_listener", "com.android.cts.verifier/.notifications.MockListener"), ROOT, null, Duration.ofSeconds(5));
+        staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "cmd", "notification", "allow_listener", "com.example.autoctsver/.NotificationListener"), ROOT, null, Duration.ofSeconds(5));
+
         // Critical AppOps for report creation & device identifiers
-        staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "appops", "set", "com.android.cts.verifier", "android:read_device_identifiers", "allow"), ROOT, null, Duration.ofSeconds(5));
-        staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "appops", "set", "com.android.cts.verifier", "MANAGE_EXTERNAL_STORAGE", "allow"), ROOT, null, Duration.ofSeconds(5));
-        staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "appops", "set", "com.android.cts.verifier", "READ_EXTERNAL_STORAGE", "allow"), ROOT, null, Duration.ofSeconds(5));
-        staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "appops", "set", "com.android.cts.verifier", "WRITE_EXTERNAL_STORAGE", "allow"), ROOT, null, Duration.ofSeconds(5));
-        staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "appops", "set", "com.android.cts.verifier", "SYSTEM_ALERT_WINDOW", "allow"), ROOT, null, Duration.ofSeconds(5));
+        String[] ctsvOps = {
+            "android:read_device_identifiers",
+            "MANAGE_EXTERNAL_STORAGE",
+            "READ_EXTERNAL_STORAGE",
+            "WRITE_EXTERNAL_STORAGE",
+            "SYSTEM_ALERT_WINDOW",
+            "GET_USAGE_STATS",
+            "ACCESS_RESTRICTED_SETTINGS",
+            "PROJECT_MEDIA",
+            "WRITE_SETTINGS"
+        };
+        for (String op : ctsvOps) {
+            staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "appops", "set", "com.android.cts.verifier", op, "allow"), ROOT, null, Duration.ofSeconds(5));
+        }
 
         // AutoCtsVerifier AppOps
-        staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "appops", "set", "com.example.autoctsver", "MANAGE_EXTERNAL_STORAGE", "allow"), ROOT, null, Duration.ofSeconds(5));
-
-        // Device Owner configurations
-        staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "dpm", "set-device-owner", "--user", "0", "com.android.cts.emptydeviceowner/.EmptyDeviceAdmin"), ROOT, null, Duration.ofSeconds(5));
-        staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "dpm", "set-device-owner", "com.android.cts.emptydeviceowner/.EmptyDeviceAdminReceiver"), ROOT, null, Duration.ofSeconds(5));
-
-        // Global settings
-        staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "settings", "put", "global", "verifier_verify_adb_installs", "0"), ROOT, null, Duration.ofSeconds(5));
+        String[] autoOps = {
+            "MANAGE_EXTERNAL_STORAGE",
+            "READ_EXTERNAL_STORAGE",
+            "WRITE_EXTERNAL_STORAGE",
+            "SYSTEM_ALERT_WINDOW",
+            "GET_USAGE_STATS"
+        };
+        for (String op : autoOps) {
+            staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "appops", "set", "com.example.autoctsver", op, "allow"), ROOT, null, Duration.ofSeconds(5));
+            staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "appops", "set", "com.example.autoctsver.test", op, "allow"), ROOT, null, Duration.ofSeconds(5));
+        }
 
         // Runtime permissions
         String[] perms = {
@@ -1344,15 +1419,26 @@ public class AtmBatchLauncher {
             "android.permission.SYSTEM_ALERT_WINDOW",
             "android.permission.ACCESS_FINE_LOCATION",
             "android.permission.ACCESS_COARSE_LOCATION",
+            "android.permission.ACCESS_BACKGROUND_LOCATION",
             "android.permission.CAMERA",
-            "android.permission.RECORD_AUDIO"
+            "android.permission.RECORD_AUDIO",
+            "android.permission.BODY_SENSORS",
+            "android.permission.ACTIVITY_RECOGNITION"
         };
         for (String p : perms) {
             staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "pm", "grant", "com.android.cts.verifier", p), ROOT, null, Duration.ofSeconds(5));
         }
-        staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "pm", "grant", "com.example.autoctsver", "android.permission.POST_NOTIFICATIONS"), ROOT, null, Duration.ofSeconds(5));
-        staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "pm", "grant", "com.example.autoctsver", "android.permission.WRITE_EXTERNAL_STORAGE"), ROOT, null, Duration.ofSeconds(5));
-        staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "pm", "grant", "com.example.autoctsver", "android.permission.READ_EXTERNAL_STORAGE"), ROOT, null, Duration.ofSeconds(5));
+
+        String[] testPerms = {
+            "android.permission.POST_NOTIFICATIONS",
+            "android.permission.WRITE_EXTERNAL_STORAGE",
+            "android.permission.READ_EXTERNAL_STORAGE",
+            "android.permission.MANAGE_EXTERNAL_STORAGE"
+        };
+        for (String p : testPerms) {
+            staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "pm", "grant", "com.example.autoctsver", p), ROOT, null, Duration.ofSeconds(5));
+            staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "pm", "grant", "com.example.autoctsver.test", p), ROOT, null, Duration.ofSeconds(5));
+        }
     }
 
     private static void triggerCtsVerifierExport(DeviceInfo device, Consumer<String> log) {
@@ -1500,12 +1586,17 @@ public class AtmBatchLauncher {
         staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "dpm", "remove-active-admin", "com.android.cts.emptydeviceowner/.EmptyDeviceAdmin"), ROOT, null, Duration.ofSeconds(5));
         staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "dpm", "remove-active-admin", "com.android.cts.emptydeviceowner/.EmptyDeviceAdminReceiver"), ROOT, null, Duration.ofSeconds(5));
         staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "dpm", "remove-active-admin", "--user", "0", "com.android.cts.emptydeviceowner/.EmptyDeviceAdmin"), ROOT, null, Duration.ofSeconds(5));
+        staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "dpm", "remove-active-admin", "--user", "0", "com.android.cts.emptydeviceowner/.EmptyDeviceAdminReceiver"), ROOT, null, Duration.ofSeconds(5));
         staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "dpm", "remove-active-admin", "com.android.cts.verifier/com.android.cts.verifier.managedprovisioning.DeviceAdminTestReceiver"), ROOT, null, Duration.ofSeconds(5));
+        staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "dpm", "remove-active-admin", "com.android.cts.verifier/.managedprovisioning.DeviceAdminTestReceiver"), ROOT, null, Duration.ofSeconds(5));
+        staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "dpm", "remove-active-admin", "com.android.cts.verifier/com.android.cts.verifier.managedprovisioning.GenericDeviceAdminReceiver"), ROOT, null, Duration.ofSeconds(5));
+        staticRunCommand(Arrays.asList(cliAdbPath, "-s", serial, "shell", "dpm", "remove-active-admin", "com.android.cts.verifier/.managedprovisioning.GenericDeviceAdminReceiver"), ROOT, null, Duration.ofSeconds(5));
     }
 
     private static void cleanupCtsVerifier(String serial, Consumer<String> log) {
         log.accept("[CTSV] Cleaning up device " + serial + " (removing device admins and uninstalling CTS-V packages)...");
         cleanupDeviceAdmin(serial);
+        removeNonOwnerUsers(serial, log);
         List<String> pkgs = Arrays.asList(
             "com.example.autoctsver",
             "com.example.autoctsver.test",

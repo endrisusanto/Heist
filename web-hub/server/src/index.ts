@@ -1395,11 +1395,12 @@ wssBridge.on('connection', (ws, req) => {
               (id) => id !== payload.run_id
             );
           }
+          const isCancelled = payload.exit_code === 130;
           const ok = payload.exit_code === 0;
-          pushLog(`[${boundNodeId}] Run ${payload.run_id} finished with exit code ${payload.exit_code}`, ok ? 'success' : 'err');
+          pushLog(`[${boundNodeId}] Run ${payload.run_id} finished with exit code ${payload.exit_code}`, ok ? 'success' : isCancelled ? 'warn' : 'err');
           const wf = findWorkflowByRunId(payload.run_id);
           if (wf) {
-            finishDeviceRun(wf.serial, ok ? 'FINISHED' : 'CANCELLED');
+            finishDeviceRun(wf.serial, isCancelled ? 'CANCELLED' : 'FINISHED');
           } else {
             activeRunsMap.delete(`${payload.run_id}:${boundNodeId}`);
             broadcastFleetState();

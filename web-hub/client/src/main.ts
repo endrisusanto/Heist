@@ -1194,7 +1194,7 @@ function renderHistory() {
         <td><span class="status-pill ${isFinished ? 'finished' : 'cancelled'}">${item.status}</span></td>
         <td>
           ${
-            isFinished
+            item.archiveName
               ? `<a href="#" class="archive-pill-link" onclick="window.downloadFile('${item.archiveName}', 'all', '${item.devices[0] || 'device'}', '${item.nodeId}', '${itemPda}', '${itemModel}', '${item.mode}'); return false;">${item.archiveName}</a>`
               : `<span style="color: var(--text-muted); font-size: 10.5px;">No Zip</span>`
           }
