@@ -1232,24 +1232,38 @@ public class AtmBatchLauncher {
                 staticRunCommand(Arrays.asList(cliAdbPath, "-s", device.serial, "pull", rp, destDir.toString()), ROOT, null, Duration.ofSeconds(30));
             }
 
-            // Unpack any zip found in destDir
+            // Unpack ONLY the latest zip found in destDir (or subdirectories like verifierReports)
             try (var stream = Files.walk(destDir)) {
-                List<Path> zips = stream.filter(p -> p.toString().endsWith(".zip")).toList();
-                for (Path zp : zips) {
-                    unzipFile(zp, destDir);
-                    Path rootZip = destDir.resolve(zp.getFileName());
-                    if (!zp.equals(rootZip)) {
-                        try { Files.copy(zp, rootZip, StandardCopyOption.REPLACE_EXISTING); } catch (Exception ignored) {}
+                List<Path> zips = stream.filter(Files::isRegularFile)
+                        .filter(p -> p.getFileName().toString().toLowerCase().endsWith(".zip"))
+                        .sorted((a, b) -> {
+                            long ma = staticLastModified(a);
+                            long mb = staticLastModified(b);
+                            if (ma != mb) return Long.compare(mb, ma);
+                            return b.getFileName().toString().compareTo(a.getFileName().toString());
+                        })
+                        .toList();
+                if (!zips.isEmpty()) {
+                    Path latestZip = zips.get(0);
+                    log.accept("[CTSV] Selecting latest verifier report archive: " + latestZip.getFileName());
+                    unzipFile(latestZip, destDir);
+                    Path rootZip = destDir.resolve(latestZip.getFileName());
+                    if (!latestZip.equals(rootZip)) {
+                        try { Files.copy(latestZip, rootZip, StandardCopyOption.REPLACE_EXISTING); } catch (Exception ignored) {}
                     }
                 }
             } catch (Exception ignored) {}
 
-            // If a nested folder with test_result.xml was created, copy files to destDir root
+            // Find the latest test_result.xml in destDir or its subfolders and copy to destDir root
             try (var stream = Files.walk(destDir)) {
-                List<Path> reports = stream.filter(p -> p.getFileName().toString().equals("test_result.xml")).toList();
-                for (Path rep : reports) {
-                    if (!rep.getParent().equals(destDir)) {
-                        try (var s = Files.list(rep.getParent())) {
+                List<Path> reports = stream.filter(Files::isRegularFile)
+                        .filter(p -> p.getFileName().toString().equalsIgnoreCase("test_result.xml"))
+                        .sorted((a, b) -> Long.compare(staticLastModified(b), staticLastModified(a)))
+                        .toList();
+                if (!reports.isEmpty()) {
+                    Path latestReport = reports.get(0);
+                    if (!latestReport.getParent().equals(destDir)) {
+                        try (var s = Files.list(latestReport.getParent())) {
                             for (Path src : s.toList()) {
                                 Files.copy(src, destDir.resolve(src.getFileName()), StandardCopyOption.REPLACE_EXISTING);
                             }
@@ -1631,43 +1645,73 @@ public class AtmBatchLauncher {
         }
     }
 
-    private static Map<String, String> parseCtsvSubtestsFromXml(Path xmlFile) {
+    private static Map<String, String> parseCtsvSubtestsFromXml(Path target) {
         Map<String, String> res = new LinkedHashMap<>();
         res.put("DeviceOwnerTestsNormal", "Not Executed");
         res.put("BYODManagedProvisioningNormal", "Not Executed");
-        if (xmlFile == null || !Files.exists(xmlFile)) return res;
+        if (target == null || !Files.exists(target)) return res;
         try {
-            String xml = Files.readString(xmlFile, StandardCharsets.UTF_8);
-            Matcher testMatcher = Pattern.compile("<Test\\b([^>]*)", Pattern.CASE_INSENSITIVE).matcher(xml);
-            while (testMatcher.find()) {
-                String attrs = testMatcher.group(1);
-                Matcher rMatch = Pattern.compile("result=\"([^\"]+)\"", Pattern.CASE_INSENSITIVE).matcher(attrs);
-                Matcher nMatch = Pattern.compile("name=\"([^\"]+)\"", Pattern.CASE_INSENSITIVE).matcher(attrs);
-                String result = rMatch.find() ? rMatch.group(1).toLowerCase() : "";
-                String name = nMatch.find() ? nMatch.group(1) : "";
-                String status = "pass".equalsIgnoreCase(result) ? "Passed" : ("fail".equalsIgnoreCase(result) ? "Failed" : "Not Executed");
-                if (Pattern.compile("DeviceOwnerPositiveTestActivity|CHECK_DEVICE_OWNER|DeviceOwner", Pattern.CASE_INSENSITIVE).matcher(name).find()) {
-                    res.put("DeviceOwnerTestsNormal", status);
-                }
-                if (Pattern.compile("ByodFlowTestActivity|BYOD_ProfileOwnerInstalled|Byod", Pattern.CASE_INSENSITIVE).matcher(name).find()) {
-                    res.put("BYODManagedProvisioningNormal", status);
+            Path fileToRead = target;
+            if (Files.isDirectory(target)) {
+                try (var stream = Files.walk(target)) {
+                    List<Path> cand = stream.filter(Files::isRegularFile)
+                            .filter(p -> p.getFileName().toString().toLowerCase().endsWith(".xml") || p.getFileName().toString().toLowerCase().endsWith(".zip"))
+                            .sorted((a, b) -> Long.compare(staticLastModified(b), staticLastModified(a)))
+                            .toList();
+                    if (!cand.isEmpty()) {
+                        fileToRead = cand.get(0);
+                    }
                 }
             }
-            Matcher caseMatcher = Pattern.compile("<TestCase\\b([^>]*)>([\\s\\S]*?)</TestCase>", Pattern.CASE_INSENSITIVE).matcher(xml);
-            while (caseMatcher.find()) {
-                String caseAttrs = caseMatcher.group(1);
-                String caseBody = caseMatcher.group(2);
-                Matcher cnMatch = Pattern.compile("name=\"([^\"]+)\"", Pattern.CASE_INSENSITIVE).matcher(caseAttrs);
-                String caseName = cnMatch.find() ? cnMatch.group(1) : "";
-                Matcher tbMatch = Pattern.compile("<Test\\b[^>]*result=\"([^\"]+)\"", Pattern.CASE_INSENSITIVE).matcher(caseBody);
-                if (tbMatch.find()) {
-                    String r = tbMatch.group(1).toLowerCase();
-                    String status = "pass".equalsIgnoreCase(r) ? "Passed" : ("fail".equalsIgnoreCase(r) ? "Failed" : "Not Executed");
-                    if (Pattern.compile("DeviceOwnerPositiveTestActivity|DeviceOwner", Pattern.CASE_INSENSITIVE).matcher(caseName).find()) {
+
+            String xml = null;
+            if (fileToRead.toString().toLowerCase().endsWith(".zip")) {
+                try (ZipInputStream zis = new ZipInputStream(Files.newInputStream(fileToRead))) {
+                    ZipEntry entry;
+                    while ((entry = zis.getNextEntry()) != null) {
+                        String eName = entry.getName().toLowerCase();
+                        if (eName.endsWith("test_result.xml") || eName.endsWith("ctsv_result.xml")) {
+                            xml = new String(zis.readAllBytes(), StandardCharsets.UTF_8);
+                            break;
+                        }
+                    }
+                }
+            } else {
+                xml = Files.readString(fileToRead, StandardCharsets.UTF_8);
+            }
+
+            if (xml != null && !xml.isBlank()) {
+                Matcher testMatcher = Pattern.compile("<Test\\b([^>]*)", Pattern.CASE_INSENSITIVE).matcher(xml);
+                while (testMatcher.find()) {
+                    String attrs = testMatcher.group(1);
+                    Matcher rMatch = Pattern.compile("result=\"([^\"]+)\"", Pattern.CASE_INSENSITIVE).matcher(attrs);
+                    Matcher nMatch = Pattern.compile("name=\"([^\"]+)\"", Pattern.CASE_INSENSITIVE).matcher(attrs);
+                    String result = rMatch.find() ? rMatch.group(1).toLowerCase() : "";
+                    String name = nMatch.find() ? nMatch.group(1) : "";
+                    String status = "pass".equalsIgnoreCase(result) ? "Passed" : ("fail".equalsIgnoreCase(result) ? "Failed" : "Not Executed");
+                    if (Pattern.compile("DeviceOwnerPositiveTestActivity|CHECK_DEVICE_OWNER|DeviceOwner", Pattern.CASE_INSENSITIVE).matcher(name).find()) {
                         res.put("DeviceOwnerTestsNormal", status);
                     }
-                    if (Pattern.compile("ByodFlowTestActivity|Byod", Pattern.CASE_INSENSITIVE).matcher(caseName).find()) {
+                    if (Pattern.compile("ByodFlowTestActivity|BYOD_ProfileOwnerInstalled|Byod", Pattern.CASE_INSENSITIVE).matcher(name).find()) {
                         res.put("BYODManagedProvisioningNormal", status);
+                    }
+                }
+                Matcher caseMatcher = Pattern.compile("<TestCase\\b([^>]*)>([\\s\\S]*?)</TestCase>", Pattern.CASE_INSENSITIVE).matcher(xml);
+                while (caseMatcher.find()) {
+                    String caseAttrs = caseMatcher.group(1);
+                    String caseBody = caseMatcher.group(2);
+                    Matcher cnMatch = Pattern.compile("name=\"([^\"]+)\"", Pattern.CASE_INSENSITIVE).matcher(caseAttrs);
+                    String caseName = cnMatch.find() ? cnMatch.group(1) : "";
+                    Matcher tbMatch = Pattern.compile("<Test\\b[^>]*result=\"([^\"]+)\"", Pattern.CASE_INSENSITIVE).matcher(caseBody);
+                    if (tbMatch.find()) {
+                        String r = tbMatch.group(1).toLowerCase();
+                        String status = "pass".equalsIgnoreCase(r) ? "Passed" : ("fail".equalsIgnoreCase(r) ? "Failed" : "Not Executed");
+                        if (Pattern.compile("DeviceOwnerPositiveTestActivity|DeviceOwner", Pattern.CASE_INSENSITIVE).matcher(caseName).find()) {
+                            res.put("DeviceOwnerTestsNormal", status);
+                        }
+                        if (Pattern.compile("ByodFlowTestActivity|Byod", Pattern.CASE_INSENSITIVE).matcher(caseName).find()) {
+                            res.put("BYODManagedProvisioningNormal", status);
+                        }
                     }
                 }
             }

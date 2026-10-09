@@ -1,6 +1,7 @@
 import http from 'http';
 import fs from 'fs';
 import path from 'path';
+import zlib from 'zlib';
 import child_process from 'child_process';
 import { fileURLToPath } from 'url';
 import { WebSocketServer, WebSocket } from 'ws';
@@ -146,44 +147,73 @@ interface HistoryRecord {
 }
 
 // Helper functions for Results generation and packaging
-function findRawZipInDir(dir: string): { filename: string; buffer: Buffer } | null {
-  const checkDirs = [
-    path.join(dir, 'VerifierReports'),
-    path.join(dir, 'verifierReports'),
-    dir
-  ];
-
-  const candidates: Array<{ filename: string; fullPath: string; mtime: number }> = [];
-  for (const d of checkDirs) {
-    if (!fs.existsSync(d)) continue;
-    try {
-      if (!fs.statSync(d).isDirectory()) continue;
-      const files = fs.readdirSync(d);
-      for (const f of files) {
-        if (f.toLowerCase().endsWith('.zip')) {
-          const fullPath = path.join(d, f);
-          try {
-            const stat = fs.statSync(fullPath);
-            if (stat.isFile() && stat.size > 0) {
-              candidates.push({ filename: f, fullPath, mtime: stat.mtimeMs });
-            }
-          } catch {}
+function extractXmlFromZipBuffer(buf: Buffer): string | null {
+  try {
+    let offset = 0;
+    while (offset + 30 <= buf.length) {
+      if (buf.readUInt32LE(offset) !== 0x04034b50) break;
+      const method = buf.readUInt16LE(offset + 8);
+      const compSize = buf.readUInt32LE(offset + 18);
+      const nameLen = buf.readUInt16LE(offset + 26);
+      const extraLen = buf.readUInt16LE(offset + 28);
+      const name = buf.toString('utf8', offset + 30, offset + 30 + nameLen);
+      const dataOffset = offset + 30 + nameLen + extraLen;
+      if (name.toLowerCase().endsWith('test_result.xml') || name.toLowerCase().endsWith('ctsv_result.xml')) {
+        const compData = buf.subarray(dataOffset, dataOffset + compSize);
+        if (method === 0) {
+          return compData.toString('utf8');
+        } else if (method === 8) {
+          return zlib.inflateRawSync(compData).toString('utf8');
         }
+      }
+      offset = dataOffset + compSize;
+    }
+  } catch {}
+  return null;
+}
+
+function findRawZipInDir(dir: string): { filename: string; buffer: Buffer } | null {
+  if (!fs.existsSync(dir)) return null;
+  const candidates: Array<{ filename: string; fullPath: string; mtime: number }> = [];
+
+  function walk(curr: string, depth = 0) {
+    if (depth > 4 || !fs.existsSync(curr)) return;
+    try {
+      const stat = fs.statSync(curr);
+      if (!stat.isDirectory()) return;
+      const files = fs.readdirSync(curr);
+      for (const f of files) {
+        const fullPath = path.join(curr, f);
+        try {
+          const s = fs.statSync(fullPath);
+          if (s.isFile() && f.toLowerCase().endsWith('.zip') && s.size > 0) {
+            candidates.push({ filename: f, fullPath, mtime: s.mtimeMs });
+          } else if (s.isDirectory()) {
+            walk(fullPath, depth + 1);
+          }
+        } catch {}
       }
     } catch {}
   }
 
+  walk(dir);
   if (candidates.length === 0) return null;
 
   candidates.sort((a, b) => {
+    const aMatch = a.filename.match(/(\d{4}[._]\d{2}[._]\d{2}[._]\d{2}[.:_]\d{2}[.:_]\d{2})/);
+    const bMatch = b.filename.match(/(\d{4}[._]\d{2}[._]\d{2}[._]\d{2}[.:_]\d{2}[.:_]\d{2})/);
+    if (aMatch && bMatch) {
+      const cmp = bMatch[1].localeCompare(aMatch[1]);
+      if (cmp !== 0) return cmp;
+    }
+    if (b.mtime !== a.mtime) {
+      return b.mtime - a.mtime;
+    }
     const aIsCts = a.filename.includes('CTS_VERIFIER');
     const bIsCts = b.filename.includes('CTS_VERIFIER');
     if (aIsCts && !bIsCts) return -1;
     if (!aIsCts && bIsCts) return 1;
-    if (aIsCts && bIsCts) {
-      return b.filename.localeCompare(a.filename);
-    }
-    return b.mtime - a.mtime;
+    return b.filename.localeCompare(a.filename);
   });
 
   const best = candidates[0];
@@ -199,6 +229,8 @@ function findLocalResultFolder(model: string, pda: string, toolFolder: string): 
     RESULTS_ROOT,
     '/atm-results',
     path.join(RESULTS_ROOT, 'results'),
+    path.join(process.cwd(), 'results'),
+    path.resolve(process.cwd(), '../results'),
     '/data/results',
     '/data'
   ];
@@ -346,28 +378,54 @@ function parseCtsvXmlSubtests(xml: string): Record<string, string> {
 function getCtsvSubtestResultsFromXml(model: string, pda: string): Record<string, string> | null {
   const ctsvDir = findLocalResultFolder(model, pda, 'CTSVerifier');
   if (!ctsvDir) return null;
-  let xmlPath = path.join(ctsvDir, 'test_result.xml');
-  if (!fs.existsSync(xmlPath)) {
+
+  const xmlCandidates: Array<{ path: string; mtime: number }> = [];
+
+  function walk(curr: string, depth = 0) {
+    if (depth > 4 || !fs.existsSync(curr)) return;
     try {
-      const subEntries = fs.readdirSync(ctsvDir, { withFileTypes: true });
-      for (const entry of subEntries) {
-        if (entry.isDirectory()) {
-          const cand = path.join(ctsvDir, entry.name, 'test_result.xml');
-          if (fs.existsSync(cand)) {
-            xmlPath = cand;
-            break;
+      const stat = fs.statSync(curr);
+      if (!stat.isDirectory()) return;
+      const entries = fs.readdirSync(curr);
+      for (const entry of entries) {
+        const full = path.join(curr, entry);
+        try {
+          const s = fs.statSync(full);
+          if (s.isFile()) {
+            const eLower = entry.toLowerCase();
+            if (eLower === 'test_result.xml' || eLower === 'ctsv_result.xml') {
+              xmlCandidates.push({ path: full, mtime: s.mtimeMs });
+            }
+          } else if (s.isDirectory()) {
+            walk(full, depth + 1);
           }
-        }
+        } catch {}
       }
     } catch {}
   }
-  if (!fs.existsSync(xmlPath)) return null;
-  try {
-    const xmlContent = fs.readFileSync(xmlPath, 'utf8');
-    return parseCtsvXmlSubtests(xmlContent);
-  } catch {
-    return null;
+
+  walk(ctsvDir);
+
+  if (xmlCandidates.length > 0) {
+    xmlCandidates.sort((a, b) => b.mtime - a.mtime);
+    try {
+      const xmlContent = fs.readFileSync(xmlCandidates[0].path, 'utf8');
+      const parsed = parseCtsvXmlSubtests(xmlContent);
+      if (parsed) return parsed;
+    } catch {}
   }
+
+  const rawZip = findRawZipInDir(ctsvDir);
+  if (rawZip && rawZip.buffer) {
+    try {
+      const extracted = extractXmlFromZipBuffer(rawZip.buffer);
+      if (extracted) {
+        return parseCtsvXmlSubtests(extracted);
+      }
+    } catch {}
+  }
+
+  return null;
 }
 
 function parseSdtXml(xmlContent: string): { status: ToolStatus; subtext: string; debuggableApps?: string[]; securityPassed?: boolean } {
