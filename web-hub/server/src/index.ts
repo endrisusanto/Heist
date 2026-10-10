@@ -702,7 +702,9 @@ function parseProgress(wf: DeviceWorkflow, line: string) {
 
       const durationStr = formatDurationSecs(durSecs);
       let subtext = detail;
-      if (!subtext) {
+      if (toolId === 'svt' && (status === 'ERROR' || status === 'WARNING' || !subtext || subtext.includes('mobilerndhub') || subtext.includes('no fresh result file'))) {
+        subtext = 'SVT butuh koneksi ke mobilerndhub.sec.samsung.net (Samsung Intranet/VPN), tidak tersedia di Ubuntu.';
+      } else if (!subtext) {
         if (status === 'PASSED') subtext = 'Pengujian sukses.';
         else if (status === 'WARNING') subtext = 'Pengujian selesai dengan peringatan.';
         else if (status === 'ERROR') subtext = 'Error (Periksa Log)';

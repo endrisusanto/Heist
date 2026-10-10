@@ -499,7 +499,7 @@ const TOOL_DEFS: ToolDef[] = [
   {
     id: 'svt',
     name: 'SVTPreloadValidation',
-    desc: 'Validasi Preload Aplikasi & Komponen SVT'
+    desc: 'Validasi Preload Aplikasi & Komponen SVT (Butuh Intranet mobilerndhub.sec.samsung.net)'
   },
   {
     id: 'sdt',

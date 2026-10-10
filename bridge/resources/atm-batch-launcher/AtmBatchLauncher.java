@@ -373,7 +373,7 @@ public class AtmBatchLauncher {
                         ? new ResultSummary("CANCELLED", "cancel requested")
                         : inspectResult(device, tool, toolStarted, outcome.exitCode);
                 ResultSummary summary = outcome.exitCode != 0 || outcome.timedOut
-                        ? new ResultSummary("ERROR", processFailureDetail(outcome, inspected))
+                        ? new ResultSummary("ERROR", processFailureDetail(outcome, inspected, tool))
                         : inspected;
                 log("[" + device.serial + "] END " + tool.displayName + " exit=" + outcome.exitCode
                         + " duration=" + outcome.durationSeconds + "s result=" + summary.status + " " + summary.detail);
@@ -475,6 +475,9 @@ public class AtmBatchLauncher {
                     return "NOTEXECUTED".equals(deviceResult.status) && exitCode == 0
                             ? new ResultSummary("PASS", "exit=0 (SDT saved result externally)")
                             : deviceResult;
+                }
+                if (tool == ToolProfile.SVT && !isWindows()) {
+                    return new ResultSummary("FAIL", "SVT butuh koneksi ke mobilerndhub.sec.samsung.net (Samsung Intranet/VPN) yang tidak tersedia di Ubuntu/Linux.");
                 }
                 if (exitCode == 0) {
                     return new ResultSummary("PASS", "Completed with exit=0");
@@ -851,7 +854,7 @@ public class AtmBatchLauncher {
                         ? new ResultSummary("CANCELLED", "cancel requested")
                         : staticInspectResult(device, tool, toolStarted, outcome.exitCode);
                 ResultSummary summary = outcome.exitCode != 0 || outcome.timedOut
-                        ? new ResultSummary("ERROR", processFailureDetail(outcome, inspected))
+                        ? new ResultSummary("ERROR", processFailureDetail(outcome, inspected, tool))
                         : inspected;
                 System.out.println("[" + device.serial + "] END " + tool.displayName + " exit=" + outcome.exitCode
                         + " duration=" + outcome.durationSeconds + "s result=" + summary.status + " " + summary.detail);
@@ -1745,6 +1748,9 @@ public class AtmBatchLauncher {
                             ? new ResultSummary("PASS", "exit=0 (SDT saved result externally)")
                             : deviceResult;
                 }
+                if (tool == ToolProfile.SVT && !isWindows()) {
+                    return new ResultSummary("FAIL", "SVT butuh koneksi ke mobilerndhub.sec.samsung.net (Samsung Intranet/VPN) yang tidak tersedia di Ubuntu/Linux.");
+                }
                 if (exitCode == 0) {
                     return new ResultSummary("PASS", "Completed with exit=0");
                 }
@@ -2117,7 +2123,10 @@ public class AtmBatchLauncher {
         return "PASS".equalsIgnoreCase(status) || "WARNING".equalsIgnoreCase(status);
     }
 
-    private static String processFailureDetail(ProcessOutcome outcome, ResultSummary inspected) {
+    private static String processFailureDetail(ProcessOutcome outcome, ResultSummary inspected, ToolProfile tool) {
+        if (tool == ToolProfile.SVT && !isWindows()) {
+            return "SVT butuh koneksi ke mobilerndhub.sec.samsung.net (Samsung Intranet/VPN) yang tidak tersedia di Ubuntu/Linux.";
+        }
         String reason = outcome.timedOut ? "tool timed out" : "tool exit=" + outcome.exitCode;
         if (inspected == null || inspected.detail == null || inspected.detail.isBlank()) return reason;
         return reason + "; " + inspected.status + " " + inspected.detail;
@@ -2348,7 +2357,7 @@ public class AtmBatchLauncher {
         BVT("BVT", "BVT.jar", "BVT/bvt_result.xml", true, false,
                 "Runs BVT via cts-tradefed resource; ANDROID_SERIAL is set for device isolation."),
         SVT("SVT", "SVT.jar", "SVT/svt_result.xml", true, false,
-                "Runs SVT silent mode with -s <serial> and output folder."),
+                "Runs SVT silent mode with -s <serial> and output folder. (Memerlukan Samsung Intranet mobilerndhub.sec.samsung.net)."),
         SDT("SDT", "SDT.jar", "SDT/SDTResults_", true, false,
                 "Runs SDT --silent; ANDROID_SERIAL is set for device isolation."),
         CTSV("CTS-V", "resource/CTSVerifier", "CTSVerifier/ctsv_result.xml", true, false,
@@ -2381,7 +2390,7 @@ public class AtmBatchLauncher {
             return switch (this) {
                 case GETPROP -> Arrays.asList(JAVA_BIN, "-jar", jar, "silent");
                 case BVT -> Arrays.asList(JAVA_BIN, "-jar", jar, device.serial);
-                case SVT -> Arrays.asList(JAVA_BIN, "-jar", jar, "--silent", "-s", device.serial, "-o", ROOT.toString());
+                case SVT -> Arrays.asList(JAVA_BIN, "-Djava.awt.headless=true", "-jar", jar, "-silent", "-s", device.serial, "-o", ROOT.toString());
                 case SDT -> Arrays.asList(JAVA_BIN, "-jar", jar, "--silent");
                 default -> Arrays.asList(JAVA_BIN, "-jar", jar);
             };
