@@ -16,6 +16,7 @@ services:
     volumes:
       - heist-results:/data
       - /home/endri-pro/Videos/ATM/ATMv5_20260429/results:/atm-results:ro
+      - /home/endri-pro/Downloads:/downloads:ro
 
 volumes:
   heist-results:

@@ -1230,7 +1230,9 @@ input:checked + .switch-slider:before {
   flex-shrink: 0;
 }
 
-.bvt-detail-container {
+/* BVT & SVT Detail Container & Failed Test Item Styles */
+.bvt-detail-container,
+.svt-detail-container {
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -1240,14 +1242,16 @@ input:checked + .switch-slider:before {
   box-sizing: border-box;
 }
 
-.bvt-summary-text {
+.bvt-summary-text,
+.svt-summary-text {
   font-size: 10.5px;
   font-weight: 700;
   color: #f59e0b;
   margin-bottom: 2px;
 }
 
-.bvt-failed-item {
+.bvt-failed-item,
+.svt-failed-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1262,11 +1266,13 @@ input:checked + .switch-slider:before {
   min-width: 0;
 }
 
-[data-theme="light"] .bvt-failed-item {
+[data-theme="light"] .bvt-failed-item,
+[data-theme="light"] .svt-failed-item {
   background: #f8fafc;
 }
 
-.bvt-failed-name {
+.bvt-failed-name,
+.svt-failed-name {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

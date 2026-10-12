@@ -65,6 +65,8 @@ interface DeviceWorkflow {
       ctsvSubtestResults?: Record<string, string>;
       sdtDebuggableApps?: string[];
       sdtSecurityPassed?: boolean;
+      svtSummary?: { total: number; pass: number; failures: number; errors: number; notApplicables: number };
+      svtFailedTests?: Array<{ name: string; category?: string; status: string; detail: string }>;
       serial?: string;
       nodeId?: string;
     }
@@ -654,14 +656,50 @@ function renderToolDetail(toolId: string, wf: DeviceWorkflow, isRunning: boolean
 
   if (toolId === 'svt') {
     const status = rowState?.status || 'STANDBY';
+    const failedList: Array<{ name: string; category?: string; status: string; detail: string }> = rowState?.svtFailedTests || [];
+    const summary = rowState?.svtSummary;
+
+    // 1. Jika ada subtest yang gagal, tampilkan langsung di kolom detail
+    if (failedList.length > 0) {
+      return `
+        <div class="svt-detail-container">
+          ${summary ? `<div class="svt-summary-text">Total: ${summary.total} · Passed: ${summary.pass} · Failed: ${summary.failures + summary.errors}</div>` : ''}
+          ${failedList.map((f) => `
+            <div class="svt-failed-item">
+              <span class="svt-failed-name" title="${escapeHtml(f.name + (f.detail ? ': ' + f.detail : ''))}">
+                ${escapeHtml(f.name)}${f.detail ? `: ${escapeHtml(f.detail)}` : ''}
+              </span>
+              <span class="badge-failed">Failed</span>
+            </div>
+          `).join('')}
+        </div>
+      `;
+    }
+
+    // 2. Jika pengujian lolos
     if (status === 'PASSED') {
       return `
         <div class="sdt-passed-row">
+          <span class="sdt-passed-text">${summary ? `Semua valid (${summary.pass}/${summary.total})` : 'Semua komponen valid'}</span>
           <span class="badge-passed">Passed</span>
         </div>
       `;
     }
-    // ponytail: alert info pill directly in Sub-Testcase / Detail column for SVT
+
+    // 3. Jika status FAILED / ERROR umum (tanpa detail subtest)
+    if (status === 'FAILED' || status === 'ERROR') {
+      const msg = rowState?.subtext || 'SVT Failed';
+      if (!msg.includes('mobilerndhub') && !msg.includes('Intranet') && !msg.includes('VPN')) {
+        return `
+          <div class="sdt-failed-row">
+            <span class="sdt-failed-title" title="${escapeHtml(msg)}">${escapeHtml(msg)}</span>
+            <span class="badge-failed">Failed</span>
+          </div>
+        `;
+      }
+    }
+
+    // 4. Fallback / Standby / Notifikasi butuh Intranet
     const fullText = rowState?.subtext && rowState.subtext.includes('mobilerndhub')
       ? rowState.subtext
       : 'Memerlukan koneksi ke mobilerndhub.sec.samsung.net (Samsung Intranet/VPN)';
@@ -714,8 +752,16 @@ function renderResultArchiveCell(toolId: string, wf: DeviceWorkflow, status: str
       passCount = isPassedOrWarning ? 1 : 0;
       failCount = isFailedOrError ? 1 : 0;
     }
+  } else if (toolId === 'svt') {
+    if (rowState?.svtSummary) {
+      passCount = rowState.svtSummary.pass || 0;
+      failCount = (rowState.svtSummary.failures || 0) + (rowState.svtSummary.errors || 0);
+    } else {
+      passCount = isPassedOrWarning ? 1 : 0;
+      failCount = isFailedOrError ? 1 : 0;
+    }
   } else {
-    // getprop, svt, sdt
+    // getprop, sdt
     passCount = isPassedOrWarning ? 1 : 0;
     failCount = isFailedOrError ? 1 : 0;
   }

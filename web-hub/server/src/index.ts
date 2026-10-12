@@ -118,6 +118,8 @@ interface ToolRow {
   ctsvSubtestResults?: Record<string, string>;
   sdtDebuggableApps?: string[];
   sdtSecurityPassed?: boolean;
+  svtSummary?: { total: number; pass: number; failures: number; errors: number; notApplicables: number };
+  svtFailedTests?: Array<{ name: string; category?: string; status: string; detail: string }>;
   serial?: string;
   nodeId?: string;
 }
@@ -508,6 +510,185 @@ function getSdtResultFromLocal(model: string, pda: string): { status: ToolStatus
   return null;
 }
 
+function parseSvtXml(xmlContent: string): {
+  status: ToolStatus;
+  subtext: string;
+  summary: { total: number; pass: number; failures: number; errors: number; notApplicables: number };
+  failedTests: Array<{ name: string; category?: string; status: string; detail: string }>;
+} | null {
+  if (!xmlContent || !xmlContent.includes('<SVT_Details')) return null;
+
+  const rootMatch = xmlContent.match(/<SVT_Details\b([^>]*)/i);
+  const attrs = rootMatch ? rootMatch[1] : '';
+  const getAttr = (name: string) => {
+    const m = attrs.match(new RegExp(name + '="([^"]*)"', 'i'));
+    return m ? m[1] : '';
+  };
+
+  const pass = parseInt(getAttr('pass') || '0', 10);
+  const failures = parseInt(getAttr('failures') || '0', 10);
+  const errors = parseInt(getAttr('errors') || '0', 10);
+  const total = parseInt(getAttr('totalTest') || '0', 10);
+  const notApplicables = parseInt(getAttr('notApplicables') || '0', 10);
+
+  const failedTests: Array<{ name: string; category?: string; status: string; detail: string }> = [];
+
+  const catRegex = /<Category\s+name="([^"]+)">([\s\S]*?)<\/Category>/gi;
+  let catMatch;
+  while ((catMatch = catRegex.exec(xmlContent)) !== null) {
+    const category = catMatch[1];
+    const catBody = catMatch[2];
+    const caseRegex = /<TestCaseDetails\b([^>]*)>([\s\S]*?)<\/TestCaseDetails>/gi;
+    let cm;
+    while ((cm = caseRegex.exec(catBody)) !== null) {
+      const cAttrs = cm[1];
+      const body = cm[2];
+      const resMatch = cAttrs.match(/result="([^"]+)"/i);
+      const res = resMatch ? resMatch[1].toUpperCase() : '';
+      if (res === 'FAIL' || res === 'ERROR') {
+        const nameMatch = cAttrs.match(/screenshotname="([^"]+)"/i);
+        const name = nameMatch ? nameMatch[1] : 'Unknown';
+        const innerDetails: string[] = [];
+        const dRegex = /<details[^>]*>([\s\S]*?)<\/details>/gi;
+        let dm;
+        while ((dm = dRegex.exec(body)) !== null) {
+          const clean = dm[1].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+          if (clean && !innerDetails.includes(clean)) innerDetails.push(clean);
+        }
+        const detail = innerDetails.join(' ');
+        failedTests.push({ name, category, status: res, detail });
+      }
+    }
+  }
+
+  // Fallback if no Category wrapper tags
+  if (failedTests.length === 0 && (failures > 0 || errors > 0)) {
+    const caseRegex = /<TestCaseDetails\b([^>]*)>([\s\S]*?)<\/TestCaseDetails>/gi;
+    let cm;
+    while ((cm = caseRegex.exec(xmlContent)) !== null) {
+      const cAttrs = cm[1];
+      const body = cm[2];
+      const resMatch = cAttrs.match(/result="([^"]+)"/i);
+      const res = resMatch ? resMatch[1].toUpperCase() : '';
+      if (res === 'FAIL' || res === 'ERROR') {
+        const nameMatch = cAttrs.match(/screenshotname="([^"]+)"/i);
+        const name = nameMatch ? nameMatch[1] : 'Unknown';
+        const innerDetails: string[] = [];
+        const dRegex = /<details[^>]*>([\s\S]*?)<\/details>/gi;
+        let dm;
+        while ((dm = dRegex.exec(body)) !== null) {
+          const clean = dm[1].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+          if (clean && !innerDetails.includes(clean)) innerDetails.push(clean);
+        }
+        const detail = innerDetails.join(' ');
+        failedTests.push({ name, status: res, detail });
+      }
+    }
+  }
+
+  const isFailed = failures > 0 || errors > 0;
+  const status: ToolStatus = isFailed ? 'FAILED' : 'PASSED';
+  const subtext = isFailed
+    ? `SVT: ${failures + errors} test gagal (${pass}/${total} lolos)`
+    : `SVT: Semua lolos (${pass}/${total})`;
+
+  return {
+    status,
+    subtext,
+    summary: { total, pass, failures, errors, notApplicables },
+    failedTests
+  };
+}
+
+function getSvtResultFromLocal(model: string, pda: string): ReturnType<typeof parseSvtXml> {
+  const candidateFolders = ['SVT', 'svt', 'preload'];
+  let svtDir: string | null = null;
+  for (const f of candidateFolders) {
+    svtDir = findLocalResultFolder(model, pda, f);
+    if (svtDir) break;
+  }
+
+  const checkDirForXml = (dir: string): string | null => {
+    if (!fs.existsSync(dir)) return null;
+    const directXml = path.join(dir, 'svt_result.xml');
+    if (fs.existsSync(directXml)) {
+      try { return fs.readFileSync(directXml, 'utf8'); } catch {}
+    }
+    try {
+      const entries = fs.readdirSync(dir);
+      for (const e of entries) {
+        const full = path.join(dir, e);
+        try {
+          const st = fs.statSync(full);
+          if (st.isFile() && e.toLowerCase() === 'svt_result.xml') {
+            return fs.readFileSync(full, 'utf8');
+          }
+          if (st.isDirectory()) {
+            const subXml = path.join(full, 'svt_result.xml');
+            if (fs.existsSync(subXml)) {
+              return fs.readFileSync(subXml, 'utf8');
+            }
+          }
+          if (st.isFile() && e.toLowerCase().endsWith('.zip')) {
+            const stdout = child_process.execSync(`unzip -p "${full}" svt_result.xml`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 3000 });
+            if (stdout && stdout.includes('<SVT_Details')) return stdout;
+          }
+        } catch {}
+      }
+    } catch {}
+    return null;
+  };
+
+  if (svtDir) {
+    const xml = checkDirForXml(svtDir);
+    if (xml) return parseSvtXml(xml);
+  }
+
+  // Fallback checks for custom download directories or CUCIAN
+  const norm = (s: string) => String(s || '').replace(/[-_]/g, '').toLowerCase().trim();
+  const targetModelNorm = norm(model);
+  const targetPdaNorm = norm(pda);
+  const extraRoots = [
+    '/downloads/CUCIAN',
+    '/downloads',
+    '/home/endri-pro/Downloads/CUCIAN',
+    '/home/endri-pro/Downloads'
+  ];
+  for (const root of extraRoots) {
+    if (!fs.existsSync(root)) continue;
+    try {
+      const xmlDirect = checkDirForXml(root);
+      if (xmlDirect) {
+        const parsed = parseSvtXml(xmlDirect);
+        if (parsed) {
+          const xmlNorm = norm(xmlDirect);
+          if (!targetModelNorm && !targetPdaNorm) return parsed;
+          if (targetModelNorm && xmlNorm.includes(targetModelNorm)) return parsed;
+          if (targetPdaNorm && xmlNorm.includes(targetPdaNorm)) return parsed;
+        }
+      }
+      const entries = fs.readdirSync(root);
+      for (const entry of entries) {
+        const p = path.join(root, entry);
+        if (fs.statSync(p).isDirectory()) {
+          const xml = checkDirForXml(p);
+          if (xml) {
+            const parsed = parseSvtXml(xml);
+            if (parsed) {
+              if (!targetModelNorm && !targetPdaNorm) return parsed;
+              const xmlNorm = norm(xml);
+              if (targetModelNorm && xmlNorm.includes(targetModelNorm)) return parsed;
+              if (targetPdaNorm && xmlNorm.includes(targetPdaNorm)) return parsed;
+            }
+          }
+        }
+      }
+    } catch {}
+  }
+
+  return null;
+}
+
 const STATE_FILE = path.join(RESULTS_ROOT, 'state.json');
 const app = {
   workflows: {} as Record<string, DeviceWorkflow>,
@@ -545,6 +726,18 @@ try {
         subtext: sdtRes.subtext,
         sdtDebuggableApps: sdtRes.debuggableApps || [],
         sdtSecurityPassed: sdtRes.securityPassed
+      };
+    }
+    const svtRes = getSvtResultFromLocal(wf.model, wf.pda);
+    if (svtRes) {
+      wf.toolStatus['svt'] = {
+        ...(wf.toolStatus['svt'] || {}),
+        status: svtRes.status,
+        subtext: svtRes.subtext,
+        svtSummary: svtRes.summary,
+        svtFailedTests: svtRes.failedTests,
+        serial: wf.serial,
+        nodeId: wf.nodeId
       };
     }
   }
@@ -702,8 +895,14 @@ function parseProgress(wf: DeviceWorkflow, line: string) {
 
       const durationStr = formatDurationSecs(durSecs);
       let subtext = detail;
-      if (toolId === 'svt' && (status === 'ERROR' || status === 'WARNING' || !subtext || subtext.includes('mobilerndhub') || subtext.includes('no fresh result file'))) {
-        subtext = 'SVT butuh koneksi ke mobilerndhub.sec.samsung.net (Samsung Intranet/VPN), tidak tersedia di Ubuntu.';
+      if (toolId === 'svt') {
+        const svtRes = getSvtResultFromLocal(wf.model, wf.pda);
+        if (svtRes) {
+          status = svtRes.status;
+          subtext = svtRes.subtext;
+        } else if (status === 'ERROR' || status === 'WARNING' || !subtext || subtext.includes('mobilerndhub') || subtext.includes('no fresh result file')) {
+          subtext = 'SVT butuh koneksi ke mobilerndhub.sec.samsung.net (Samsung Intranet/VPN), tidak tersedia di Ubuntu.';
+        }
       } else if (!subtext) {
         if (status === 'PASSED') subtext = 'Pengujian sukses.';
         else if (status === 'WARNING') subtext = 'Pengujian selesai dengan peringatan.';
@@ -738,6 +937,15 @@ function parseProgress(wf: DeviceWorkflow, line: string) {
             wf.toolStatus['sdt'].sdtSecurityPassed = true;
             wf.toolStatus['sdt'].sdtDebuggableApps = [];
           }
+        }
+      }
+      if (toolId === 'svt') {
+        const svtRes = getSvtResultFromLocal(wf.model, wf.pda);
+        if (svtRes) {
+          wf.toolStatus['svt'].status = svtRes.status;
+          wf.toolStatus['svt'].subtext = svtRes.subtext;
+          wf.toolStatus['svt'].svtSummary = svtRes.summary;
+          wf.toolStatus['svt'].svtFailedTests = svtRes.failedTests;
         }
       }
       broadcastApp(false);
@@ -804,6 +1012,17 @@ function finishDeviceRun(serial: string, status: 'FINISHED' | 'CANCELLED') {
         totalTests += bvtSum.total;
         passedCount += bvtSum.passed || 0;
         failedCount += bvtSum.failed || 0;
+      } else {
+        totalTests += 1;
+        if (isPassed) passedCount += 1;
+        else if (isFailed) failedCount += 1;
+      }
+    } else if (t === 'svt') {
+      const svtSum = wf.toolStatus['svt']?.svtSummary;
+      if (svtSum && svtSum.total > 0) {
+        totalTests += svtSum.total;
+        passedCount += svtSum.pass || 0;
+        failedCount += (svtSum.failures || 0) + (svtSum.errors || 0);
       } else {
         totalTests += 1;
         if (isPassed) passedCount += 1;
@@ -972,6 +1191,7 @@ function handleAppIntent(type: string, payload: any, ui: WebSocket): boolean {
         if (busy.has(s) || app.workflows[s]) continue;
         const ctsvXmlSub = getCtsvSubtestResultsFromXml(str(d.model), str(d.pda));
         const sdtRes = getSdtResultFromLocal(str(d.model), str(d.pda));
+        const svtRes = getSvtResultFromLocal(str(d.model), str(d.pda));
         const foundDev = fleetDevs.find((x) => x.serial === s);
         const androidVer = str(d.android) || (foundDev?.android && foundDev.android !== '-' ? foundDev.android : '');
         app.workflows[s] = {
@@ -984,7 +1204,8 @@ function handleAppIntent(type: string, payload: any, ui: WebSocket): boolean {
           tools: ['ctsv', 'getprop', 'bvt', 'svt', 'sdt'],
           toolStatus: {
             ...(ctsvXmlSub ? { ctsv: { status: 'PASSED', subtext: 'CTS-Verifier selesai.', ctsvSubtestResults: ctsvXmlSub } } : {}),
-            ...(sdtRes ? { sdt: { status: sdtRes.status, subtext: sdtRes.subtext } } : {})
+            ...(sdtRes ? { sdt: { status: sdtRes.status, subtext: sdtRes.subtext, sdtDebuggableApps: sdtRes.debuggableApps, sdtSecurityPassed: sdtRes.securityPassed } } : {}),
+            ...(svtRes ? { svt: { status: svtRes.status, subtext: svtRes.subtext, svtSummary: svtRes.summary, svtFailedTests: svtRes.failedTests } } : {})
           },
           ctsvSubtests: { DeviceOwnerTestsNormal: true, BYODManagedProvisioningNormal: true },
           run: null
@@ -1444,6 +1665,28 @@ wssBridge.on('connection', (ws, req) => {
               if (!target.startsWith(dir)) continue;
               fs.mkdirSync(path.dirname(target), { recursive: true });
               fs.writeFileSync(target, Buffer.from(f.b64, 'base64'));
+            }
+
+            if (String(set.tool).toLowerCase().includes('svt')) {
+              const svtFile = set.files.find((f: any) => String(f.path).toLowerCase().endsWith('svt_result.xml'));
+              if (svtFile) {
+                try {
+                  const xml = Buffer.from(svtFile.b64, 'base64').toString('utf8');
+                  const svtRes = parseSvtXml(xml);
+                  const wf = app.workflows[set.serial];
+                  if (wf && svtRes) {
+                    wf.toolStatus['svt'] = {
+                      ...(wf.toolStatus['svt'] || {}),
+                      status: svtRes.status,
+                      subtext: svtRes.subtext,
+                      svtSummary: svtRes.summary,
+                      svtFailedTests: svtRes.failedTests,
+                      serial: wf.serial,
+                      nodeId: wf.nodeId
+                    };
+                  }
+                } catch {}
+              }
             }
           }
           break;
