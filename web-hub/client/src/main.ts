@@ -652,6 +652,31 @@ function renderToolDetail(toolId: string, wf: DeviceWorkflow, isRunning: boolean
     return `<span class="empty-dash">-</span>`;
   }
 
+  if (toolId === 'svt') {
+    const status = rowState?.status || 'STANDBY';
+    if (status === 'PASSED') {
+      return `
+        <div class="sdt-passed-row">
+          <span class="badge-passed">Passed</span>
+        </div>
+      `;
+    }
+    // ponytail: alert info pill directly in Sub-Testcase / Detail column for SVT
+    const fullText = rowState?.subtext && rowState.subtext.includes('mobilerndhub')
+      ? rowState.subtext
+      : 'Memerlukan koneksi ke mobilerndhub.sec.samsung.net (Samsung Intranet/VPN)';
+    return `
+      <div class="svt-alert-pill" title="${escapeHtml(fullText)}">
+        <svg class="svt-alert-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"></circle>
+          <line x1="12" y1="8" x2="12" y2="12"></line>
+          <line x1="12" y1="16" x2="12.01" y2="16"></line>
+        </svg>
+        <span class="svt-alert-text">Butuh Intranet / VPN</span>
+      </div>
+    `;
+  }
+
   return `<span class="empty-dash">-</span>`;
 }
 
