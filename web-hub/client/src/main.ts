@@ -166,6 +166,33 @@ const els = {
   closePreflightModal: document.getElementById('closePreflightModal') as HTMLButtonElement,
   updateToolsBtn: document.getElementById('updateToolsBtn') as HTMLButtonElement | null,
   preflightReportsContainer: document.getElementById('preflightReportsContainer') as HTMLElement,
+
+  // Settings & SSO Auth
+  settingsBtn: document.getElementById('settingsBtn') as HTMLButtonElement | null,
+  authStatusDot: document.getElementById('authStatusDot') as HTMLElement | null,
+  settingsModal: document.getElementById('settingsModal') as HTMLElement | null,
+  closeSettingsModal: document.getElementById('closeSettingsModal') as HTMLButtonElement | null,
+  authCardDot: document.getElementById('authCardDot') as HTMLElement | null,
+  authCardTitle: document.getElementById('authCardTitle') as HTMLElement | null,
+  authCardSub: document.getElementById('authCardSub') as HTMLElement | null,
+  authStatusBadges: document.getElementById('authStatusBadges') as HTMLElement | null,
+  authDropzone: document.getElementById('authDropzone') as HTMLElement | null,
+  authFileInput: document.getElementById('authFileInput') as HTMLInputElement | null,
+  togglePasteBoxBtn: document.getElementById('togglePasteBoxBtn') as HTMLButtonElement | null,
+  pasteBoxContainer: document.getElementById('pasteBoxContainer') as HTMLElement | null,
+  authRawInput: document.getElementById('authRawInput') as HTMLTextAreaElement | null,
+  saveAuthTextBtn: document.getElementById('saveAuthTextBtn') as HTMLButtonElement | null,
+  testAuthBtn: document.getElementById('testAuthBtn') as HTMLButtonElement | null,
+  launchBrowserLoginBtn: document.getElementById('launchBrowserLoginBtn') as HTMLButtonElement | null,
+  clearAuthBtn: document.getElementById('clearAuthBtn') as HTMLButtonElement | null,
+  authFeedbackMsg: document.getElementById('authFeedbackMsg') as HTMLElement | null,
+  hubConfigForm: document.getElementById('hubConfigForm') as HTMLFormElement | null,
+  hubBaseUrlInput: document.getElementById('hubBaseUrlInput') as HTMLInputElement | null,
+  hubBoardSrlInput: document.getElementById('hubBoardSrlInput') as HTMLInputElement | null,
+  hubCategoryInput: document.getElementById('hubCategoryInput') as HTMLInputElement | null,
+  hubTitleTemplateInput: document.getElementById('hubTitleTemplateInput') as HTMLInputElement | null,
+  hubAutoSubmitInput: document.getElementById('hubAutoSubmitInput') as HTMLInputElement | null,
+  hubConfigFeedbackMsg: document.getElementById('hubConfigFeedbackMsg') as HTMLElement | null,
 };
 
 function cleanSpec(val?: string): string {
@@ -1235,13 +1262,28 @@ function formatTimestamp(ts?: number): string {
 }
 
 // History
+// ponytail: format title for Mobile R&D Hub submission
+function getPresetTitle(item: HistoryItem): string {
+  const devSerial = item.devices[0] || '';
+  let dev: DeviceInfo | undefined;
+  for (const node of Object.values(fleet.nodes)) {
+    dev = (node.devices || []).find((d) => d.serial === devSerial);
+    if (dev) break;
+  }
+  const subId = item.id;
+  const model = item.model || dev?.model || 'Device';
+  const pda = item.pda || dev?.build || (item.archiveName?.match(/^ATM_([^\.]+)\.zip$/i)?.[1] || 'UNKNOWN');
+  const carrier = dev?.carrier && dev.carrier !== '-' ? dev.carrier : (dev?.csc && dev.csc !== '-' ? dev.csc : 'XID');
+  return `[${subId}][${model}][${pda}][${carrier}]`;
+}
+
 function renderHistory() {
   els.historyCountBadge.textContent = historyList.length.toString();
 
   if (historyList.length === 0) {
     els.historyTableBody.innerHTML = `
       <tr>
-        <td colspan="11" class="empty-table-cell">Belum ada riwayat pengujian.</td>
+        <td colspan="12" class="empty-table-cell">Belum ada riwayat pengujian.</td>
       </tr>
     `;
     return;
@@ -1252,6 +1294,8 @@ function renderHistory() {
     const isFinished = item.status === 'FINISHED';
     const itemPda = item.pda || (item.archiveName?.match(/^ATM_([^\.]+)\.zip$/i)?.[1] || '');
     const itemModel = item.model || '';
+    const presetTitle = getPresetTitle(item);
+
     html += `
       <tr data-history-id="${item.id}">
         <td><span class="timestamp-text">${formatTimestamp(item.timestamp)}</span></td>
@@ -1263,6 +1307,9 @@ function renderHistory() {
         <td><span class="count-pill-sm ${item.failed > 0 ? 'red' : 'gray'}">${item.failed}</span></td>
         <td><span class="count-pill-sm gray">${item.total}</span></td>
         <td><span class="status-pill ${isFinished ? 'finished' : 'cancelled'}">${item.status}</span></td>
+        <td class="col-desktop-only preset-title-cell">
+          <span class="preset-title-tag" title="${presetTitle}">${presetTitle}</span>
+        </td>
         <td>
           ${
             item.archiveName
@@ -1270,7 +1317,14 @@ function renderHistory() {
               : `<span style="color: var(--text-muted); font-size: 10.5px;">No Zip</span>`
           }
         </td>
-        <td style="text-align: center;">
+        <td class="history-actions-cell" style="text-align: center;">
+          <button class="btn-icon-hub" data-submit-hub="${item.id}" title="Submit to Mobile R&D Hub" ${!item.archiveName ? 'disabled' : ''}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+              <polyline points="17 8 12 3 7 8"></polyline>
+              <line x1="12" y1="3" x2="12" y2="15"></line>
+            </svg>
+          </button>
           <button class="btn-icon-danger" data-delete-hist="${item.id}" title="Delete history entry">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
           </button>
@@ -1285,6 +1339,54 @@ function renderHistory() {
     btn.addEventListener('click', (e) => {
       const id = (e.currentTarget as HTMLElement).dataset.deleteHist!;
       sendToHub({ type: 'HISTORY_DELETE', payload: { id } });
+    });
+  });
+
+  els.historyTableBody.querySelectorAll('[data-submit-hub]').forEach((btn) => {
+    btn.addEventListener('click', async (e) => {
+      const button = e.currentTarget as HTMLButtonElement;
+      const id = button.dataset.submitHub!;
+      const item = historyList.find((h) => h.id === id);
+      if (!item) return;
+
+      const title = getPresetTitle(item);
+      if (!confirm(`Kirim hasil test ke Mobile R&D Hub?\n\nFile : ${item.archiveName || 'ATM_results.zip'}\nTitle: ${title}`)) {
+        return;
+      }
+
+      button.disabled = true;
+      button.classList.add('loading');
+      const origTitle = button.title;
+      button.title = 'Submitting...';
+
+      try {
+        const res = await fetch('/api/hub/submit', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            historyId: item.id,
+            title,
+            archiveName: item.archiveName,
+            pda: item.pda,
+            model: item.model,
+            tools: item.mode,
+            serial: item.devices[0],
+            nodeId: item.nodeId
+          })
+        });
+        const result = await res.json();
+        if (result.ok) {
+          alert(`[BERHASIL]\n${result.message}`);
+        } else {
+          alert(`[GAGAL]\n${result.message}`);
+        }
+      } catch (err: any) {
+        alert(`[ERROR]\nGagal menghubungi server: ${err.message}`);
+      } finally {
+        button.disabled = false;
+        button.classList.remove('loading');
+        button.title = origTitle;
+      }
     });
   });
 }
@@ -1761,6 +1863,332 @@ function setupEventListeners() {
       els.preflightModal.style.display = 'none';
     }
   });
+
+  setupSettingsModal();
+}
+
+interface AuthStatusResponse {
+  hasAuth: boolean;
+  valid: boolean;
+  cookiesCount: number;
+  cookies: Array<{ name: string; domain: string; expires: number; isExpired: boolean }>;
+  expiresAt: string | null;
+  hasHubSessId: boolean;
+  message?: string;
+}
+
+async function loadAuthStatus(): Promise<void> {
+  try {
+    const res = await fetch('/api/settings/auth');
+    if (!res.ok) return;
+    const data: AuthStatusResponse = await res.json();
+    renderAuthStatus(data);
+  } catch (err) {
+    console.error('Failed to load auth status', err);
+  }
+}
+
+function renderAuthStatus(data: AuthStatusResponse): void {
+  if (els.authStatusDot) {
+    els.authStatusDot.className = 'pill-dot ' + (data.valid ? 'green' : data.hasAuth ? 'amber' : 'gray');
+    els.authStatusDot.title = data.valid ? 'SSO Auth: Aktif' : data.hasAuth ? 'SSO Auth: Expired' : 'SSO Auth: Belum Ada';
+  }
+
+  if (!els.authCardTitle || !els.authCardSub || !els.authCardDot) return;
+
+  if (data.valid) {
+    els.authCardDot.className = 'status-indicator-dot green';
+    els.authCardTitle.textContent = 'Session Aktif & Siap Digunakan';
+    let sub = `Tersimpan ${data.cookiesCount} cookie`;
+    if (data.expiresAt) {
+      const expDate = new Date(data.expiresAt);
+      sub += ` • Expire: ${expDate.toLocaleDateString()} ${expDate.toLocaleTimeString()}`;
+    }
+    els.authCardSub.textContent = sub;
+  } else if (data.hasAuth) {
+    els.authCardDot.className = 'status-indicator-dot red';
+    els.authCardTitle.textContent = 'Session Telah Kedaluwarsa';
+    els.authCardSub.textContent = data.message || 'Cookie di dalam auth.json sudah expired. Silakan perbarui.';
+  } else {
+    els.authCardDot.className = 'status-indicator-dot gray';
+    els.authCardTitle.textContent = 'Belum Ada Konfigurasi auth.json';
+    els.authCardSub.textContent = 'Upload file auth.json atau paste cookie untuk mengaktifkan auto-submit.';
+  }
+
+  if (els.authStatusBadges) {
+    els.authStatusBadges.innerHTML = '';
+    for (const c of data.cookies) {
+      const badge = document.createElement('span');
+      badge.className = 'auth-badge' + (c.isExpired ? ' expired' : c.name.toUpperCase().includes('HUBSESSID') ? ' highlight' : '');
+      badge.textContent = `${c.name}${c.isExpired ? ' (exp)' : ''}`;
+      els.authStatusBadges.appendChild(badge);
+    }
+  }
+}
+
+async function loadHubConfig(): Promise<void> {
+  try {
+    const res = await fetch('/api/settings/hub');
+    if (!res.ok) return;
+    const cfg = await res.json();
+    if (els.hubBaseUrlInput) els.hubBaseUrlInput.value = cfg.hubBaseUrl || '';
+    if (els.hubBoardSrlInput) els.hubBoardSrlInput.value = cfg.boardSrl || '';
+    if (els.hubCategoryInput) els.hubCategoryInput.value = cfg.category || 'Result';
+    if (els.hubTitleTemplateInput) els.hubTitleTemplateInput.value = cfg.titleTemplate || '[{submissionId}][{productName}][{fingerprint}][{carrier}]';
+    if (els.hubAutoSubmitInput) els.hubAutoSubmitInput.checked = Boolean(cfg.autoSubmit);
+  } catch (err) {
+    console.error('Failed to load hub config', err);
+  }
+}
+
+function showAuthFeedback(msg: string, type: 'success' | 'error' | 'info'): void {
+  if (!els.authFeedbackMsg) return;
+  els.authFeedbackMsg.className = `settings-feedback-msg ${type}`;
+  els.authFeedbackMsg.textContent = msg;
+  els.authFeedbackMsg.style.display = 'block';
+  setTimeout(() => {
+    if (els.authFeedbackMsg) els.authFeedbackMsg.style.display = 'none';
+  }, 6000);
+}
+
+function showHubFeedback(msg: string, type: 'success' | 'error' | 'info'): void {
+  if (!els.hubConfigFeedbackMsg) return;
+  els.hubConfigFeedbackMsg.className = `settings-feedback-msg ${type}`;
+  els.hubConfigFeedbackMsg.textContent = msg;
+  els.hubConfigFeedbackMsg.style.display = 'block';
+  setTimeout(() => {
+    if (els.hubConfigFeedbackMsg) els.hubConfigFeedbackMsg.style.display = 'none';
+  }, 5000);
+}
+
+async function sendAuthPayload(payload: string | object): Promise<void> {
+  try {
+    const res = await fetch('/api/settings/auth', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: typeof payload === 'string' ? payload : JSON.stringify(payload)
+    });
+    const result = await res.json();
+    if (result.success) {
+      showAuthFeedback(result.message || 'Auth berhasil disimpan!', 'success');
+      loadAuthStatus();
+    } else {
+      showAuthFeedback(result.message || 'Gagal menyimpan auth.', 'error');
+    }
+  } catch (err: any) {
+    showAuthFeedback(`Error upload: ${err.message}`, 'error');
+  }
+}
+
+function setupSettingsModal(): void {
+  if (els.settingsBtn && els.settingsModal) {
+    els.settingsBtn.addEventListener('click', () => {
+      if (els.settingsModal) els.settingsModal.style.display = 'flex';
+      loadAuthStatus();
+      loadHubConfig();
+    });
+  }
+
+  if (els.closeSettingsModal && els.settingsModal) {
+    els.closeSettingsModal.addEventListener('click', () => {
+      if (els.settingsModal) els.settingsModal.style.display = 'none';
+    });
+  }
+
+  if (els.settingsModal) {
+    const modal = els.settingsModal;
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal) {
+        modal.style.display = 'none';
+      }
+    });
+  }
+
+  // Tab switching
+  const tabBtns = document.querySelectorAll('.settings-tab-btn');
+  tabBtns.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      tabBtns.forEach((b) => b.classList.remove('active'));
+      btn.classList.add('active');
+      const target = (btn as HTMLElement).dataset.tab;
+      const paneSso = document.getElementById('tabPaneSso');
+      const paneHub = document.getElementById('tabPaneHub');
+      if (target === 'hub') {
+        if (paneSso) paneSso.classList.remove('active');
+        if (paneHub) paneHub.classList.add('active');
+      } else {
+        if (paneHub) paneHub.classList.remove('active');
+        if (paneSso) paneSso.classList.add('active');
+      }
+    });
+  });
+
+  // Dropzone file upload
+  if (els.authDropzone && els.authFileInput) {
+    els.authDropzone.addEventListener('click', () => {
+      els.authFileInput?.click();
+    });
+
+    els.authDropzone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      els.authDropzone?.classList.add('drag-over');
+    });
+
+    els.authDropzone.addEventListener('dragleave', () => {
+      els.authDropzone?.classList.remove('drag-over');
+    });
+
+    els.authDropzone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      els.authDropzone?.classList.remove('drag-over');
+      if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
+        handleAuthFile(e.dataTransfer.files[0]);
+      }
+    });
+
+    els.authFileInput.addEventListener('change', () => {
+      if (els.authFileInput?.files && els.authFileInput.files.length > 0) {
+        handleAuthFile(els.authFileInput.files[0]);
+      }
+    });
+  }
+
+  function handleAuthFile(file: File) {
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const text = ev.target?.result as string;
+      if (text) sendAuthPayload(text);
+    };
+    reader.onerror = () => {
+      showAuthFeedback('Gagal membaca file.', 'error');
+    };
+    reader.readAsText(file);
+  }
+
+  // Toggle raw paste box
+  if (els.togglePasteBoxBtn && els.pasteBoxContainer) {
+    els.togglePasteBoxBtn.addEventListener('click', () => {
+      if (!els.pasteBoxContainer) return;
+      const isHidden = els.pasteBoxContainer.style.display === 'none';
+      els.pasteBoxContainer.style.display = isHidden ? 'block' : 'none';
+      if (els.togglePasteBoxBtn) {
+        els.togglePasteBoxBtn.textContent = isHidden ? 'Sembunyikan Editor' : 'Tampilkan Editor';
+      }
+    });
+  }
+
+  // Save raw text button
+  if (els.saveAuthTextBtn && els.authRawInput) {
+    els.saveAuthTextBtn.addEventListener('click', () => {
+      const val = els.authRawInput?.value.trim();
+      if (!val) {
+        showAuthFeedback('Teks cookie atau JSON tidak boleh kosong.', 'error');
+        return;
+      }
+      sendAuthPayload(val);
+    });
+  }
+
+  // Test session button
+  if (els.testAuthBtn) {
+    els.testAuthBtn.addEventListener('click', async () => {
+      if (els.testAuthBtn) {
+        els.testAuthBtn.disabled = true;
+        els.testAuthBtn.textContent = 'Menguji koneksi...';
+      }
+      showAuthFeedback('Menguji koneksi ke Mobile R&D Hub...', 'info');
+
+      try {
+        const res = await fetch('/api/settings/auth/test', { method: 'POST' });
+        const result = await res.json();
+        if (result.ok) {
+          showAuthFeedback(`[OK] ${result.message}`, 'success');
+        } else {
+          showAuthFeedback(`[Gagal] ${result.message}`, 'error');
+        }
+      } catch (err: any) {
+        showAuthFeedback(`Gagal test session: ${err.message}`, 'error');
+      } finally {
+        if (els.testAuthBtn) {
+          els.testAuthBtn.disabled = false;
+          els.testAuthBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg><span>Test Session</span>';
+        }
+      }
+    });
+  }
+
+  // Launch browser login button
+  if (els.launchBrowserLoginBtn) {
+    els.launchBrowserLoginBtn.addEventListener('click', async () => {
+      if (els.launchBrowserLoginBtn) {
+        els.launchBrowserLoginBtn.disabled = true;
+        els.launchBrowserLoginBtn.textContent = 'Membuka Browser...';
+      }
+      showAuthFeedback('Membuka browser Playwright. Silakan login pada browser window yang terbuka...', 'info');
+
+      try {
+        const res = await fetch('/api/settings/auth/login-browser', { method: 'POST' });
+        const result = await res.json();
+        if (result.ok) {
+          showAuthFeedback(result.message, 'success');
+          loadAuthStatus();
+        } else {
+          showAuthFeedback(result.message, 'error');
+        }
+      } catch (err: any) {
+        showAuthFeedback(`Gagal meluncurkan browser: ${err.message}`, 'error');
+      } finally {
+        if (els.launchBrowserLoginBtn) {
+          els.launchBrowserLoginBtn.disabled = false;
+          els.launchBrowserLoginBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg><span>Login via Browser</span>';
+        }
+      }
+    });
+  }
+
+  // Clear auth button
+  if (els.clearAuthBtn) {
+    els.clearAuthBtn.addEventListener('click', async () => {
+      if (!confirm('Hapus file auth.json tersimpan?')) return;
+      try {
+        await fetch('/api/settings/auth', { method: 'DELETE' });
+        showAuthFeedback('auth.json telah dihapus.', 'info');
+        loadAuthStatus();
+      } catch (err: any) {
+        showAuthFeedback(`Gagal menghapus: ${err.message}`, 'error');
+      }
+    });
+  }
+
+  // Hub config form submit
+  if (els.hubConfigForm) {
+    els.hubConfigForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const payload = {
+        hubBaseUrl: els.hubBaseUrlInput?.value.trim() || '',
+        boardSrl: els.hubBoardSrlInput?.value.trim() || '',
+        category: els.hubCategoryInput?.value.trim() || 'Result',
+        titleTemplate: els.hubTitleTemplateInput?.value.trim() || '[{submissionId}][{productName}][{fingerprint}][{carrier}]',
+        autoSubmit: Boolean(els.hubAutoSubmitInput?.checked)
+      };
+
+      try {
+        const res = await fetch('/api/settings/hub', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const result = await res.json();
+        if (result.success) {
+          showHubFeedback('Pengaturan Hub berhasil disimpan!', 'success');
+        } else {
+          showHubFeedback(result.message || 'Gagal menyimpan pengaturan.', 'error');
+        }
+      } catch (err: any) {
+        showHubFeedback(`Error simpan: ${err.message}`, 'error');
+      }
+    });
+  }
 }
 
 // Initializer
@@ -1768,6 +2196,9 @@ document.addEventListener('DOMContentLoaded', () => {
   setupTheme();
   setupAccordions();
   setupEventListeners();
+  loadAuthStatus();
+  loadHubConfig();
   renderAll();
   connectWS();
 });
+

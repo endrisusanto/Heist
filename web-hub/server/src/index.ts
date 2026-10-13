@@ -6,6 +6,16 @@ import child_process from 'child_process';
 import { fileURLToPath } from 'url';
 import { WebSocketServer, WebSocket } from 'ws';
 import { DeviceInfo, FleetState, NodeState, RunBatchPayload } from './types.js';
+import {
+  getHubConfig,
+  saveHubConfig,
+  getAuthStatus,
+  saveAuthJson,
+  deleteAuth,
+  verifyHubSession,
+  launchInteractiveLogin,
+  submitToMobileRndHub
+} from './authManager.js';
 
 const PORT = parseInt(process.env.PORT || '4020', 10);
 const BRIDGE_TOKEN = process.env.BRIDGE_TOKEN || '';
@@ -1362,6 +1372,93 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  function readJsonBody(incoming: http.IncomingMessage): Promise<string> {
+    return new Promise((resolve, reject) => {
+      let data = '';
+      incoming.on('data', (chunk) => {
+        data += chunk;
+        if (data.length > 5 * 1024 * 1024) reject(new Error('Payload exceeds 5MB limit'));
+      });
+      incoming.on('end', () => resolve(data));
+      incoming.on('error', reject);
+    });
+  }
+
+  // Hub Settings endpoints
+  if (req.url === '/api/settings/hub') {
+    if (req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(getHubConfig()));
+      return;
+    }
+    if (req.method === 'POST') {
+      readJsonBody(req).then((raw) => {
+        const payload = JSON.parse(raw || '{}');
+        const updated = saveHubConfig(payload);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, config: updated }));
+      }).catch((err) => {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, message: err.message }));
+      });
+      return;
+    }
+  }
+
+  // SSO Auth endpoints
+  if (req.url === '/api/settings/auth') {
+    if (req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(getAuthStatus()));
+      return;
+    }
+    if (req.method === 'POST') {
+      readJsonBody(req).then((raw) => {
+        let payload: any = raw;
+        try {
+          payload = JSON.parse(raw);
+        } catch {
+          // treat as plain text cookie string
+        }
+        const result = saveAuthJson(payload);
+        res.writeHead(result.success ? 200 : 400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(result));
+      }).catch((err) => {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, message: err.message }));
+      });
+      return;
+    }
+    if (req.method === 'DELETE') {
+      deleteAuth();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, message: 'Auth data cleared' }));
+      return;
+    }
+  }
+
+  if (req.url === '/api/settings/auth/test' && req.method === 'POST') {
+    verifyHubSession().then((result) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(result));
+    }).catch((err) => {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, status: 500, message: err.message }));
+    });
+    return;
+  }
+
+  if (req.url === '/api/settings/auth/login-browser' && req.method === 'POST') {
+    launchInteractiveLogin().then((result) => {
+      res.writeHead(result.ok ? 200 : 400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(result));
+    }).catch((err) => {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, message: err.message }));
+    });
+    return;
+  }
+
 
 
   function readDirectoryFiles(dir: string, baseDir: string = dir): Array<{ name: string; content: Buffer }> {
@@ -1465,6 +1562,38 @@ const server = http.createServer((req, res) => {
       }
     }
     return createZipBuffer(files);
+  }
+
+  // Submit to Mobile R&D Hub endpoint
+  if (req.url === '/api/hub/submit' && req.method === 'POST') {
+    readJsonBody(req).then((raw) => {
+      const payload = JSON.parse(raw || '{}');
+      const title = payload.title || 'ATM Test Result';
+      const category = payload.category || 'Result';
+      const archiveName = payload.archiveName || 'ATM_results.zip';
+      const pda = payload.pda || '';
+      const model = payload.model || '';
+      const activeTools = payload.tools ? (Array.isArray(payload.tools) ? payload.tools : [payload.tools]) : ['all'];
+
+      const archiveBuffer = getMasterArchiveZipBuffer(pda, model, activeTools);
+
+      submitToMobileRndHub({
+        title,
+        category,
+        archiveBuffer,
+        archiveFilename: archiveName
+      }).then((result) => {
+        res.writeHead(result.ok ? 200 : 400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(result));
+      }).catch((err) => {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, message: err.message }));
+      });
+    }).catch((err) => {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, message: err.message }));
+    });
+    return;
   }
 
   // File download endpoint

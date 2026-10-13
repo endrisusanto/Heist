@@ -19,3 +19,7 @@ bridge/src-tauri/target/
 # Temporary
 scratch/
 tmp/
+data/
+*auth.json
+hub_config.json
+

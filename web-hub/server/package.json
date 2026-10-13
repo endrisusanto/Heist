@@ -11,6 +11,7 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
+    "playwright": "^1.64.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {
