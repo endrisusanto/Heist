@@ -2,6 +2,7 @@
   "name": "heist-monorepo",
   "version": "0.2.6",
   "private": true,
+  "type": "module",
   "description": "Heist - Centralized Android Test Automation Hub & System Tray Fleet Bridge",
   "workspaces": [
     "web-hub/server",

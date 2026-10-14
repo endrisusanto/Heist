@@ -49,8 +49,9 @@ const DEFAULT_CONFIG: HubConfig = {
 };
 
 function resolveDataDir(): string {
-  if (process.env.DATA_DIR) {
-    return path.resolve(process.env.DATA_DIR);
+  const dir = process.env.DATA_DIR || process.env.RESULTS_DIR;
+  if (dir) {
+    return path.resolve(dir);
   }
   const currentDir = path.dirname(fileURLToPath(import.meta.url));
   const candidate = path.resolve(currentDir, '../../data');

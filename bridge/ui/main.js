@@ -17,6 +17,7 @@ const els = {
   saveBtn: document.getElementById('saveBtn'),
   hideBtn: document.getElementById('hideBtn'),
   deviceCount: document.getElementById('deviceCount'),
+  versionText: document.getElementById('versionText'),
   terminalLogs: document.getElementById('terminalLogs'),
   clearLogsBtn: document.getElementById('clearLogsBtn'),
 };
@@ -75,6 +76,9 @@ async function refreshStatus() {
     const status = await invoke('get_status');
     if (status) {
       updateStatus(status.status, status.detail);
+      if (status.version && els.versionText) {
+        els.versionText.textContent = `Heist Bridge v${status.version}`;
+      }
       if (typeof status.device_count === 'number' && els.deviceCount) {
         const count = status.device_count;
         els.deviceCount.textContent = `${count} device${count === 1 ? '' : 's'} connected`;

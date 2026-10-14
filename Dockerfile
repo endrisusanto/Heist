@@ -3,7 +3,7 @@ FROM node:22-alpine AS builder
 
 WORKDIR /app
 
-# Copy root manifest and workspaces
+# Copy dependency manifests
 COPY package.json package-lock.json* ./
 COPY web-hub/client/package.json ./web-hub/client/
 COPY web-hub/server/package.json ./web-hub/server/
@@ -16,19 +16,20 @@ COPY web-hub ./web-hub
 # Build client and server
 RUN npm run build
 
+# ponytail: strip devDependencies in builder to avoid redundant 2nd npm install in runner
+RUN npm prune --omit=dev
+
 # Stage 2: Production Runner
 FROM node:22-alpine AS runner
 
 WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=4020
+ENV DATA_DIR=/data
 
 COPY package.json ./
 COPY web-hub/server/package.json ./web-hub/server/
-COPY web-hub/client/package.json ./web-hub/client/
-
-RUN npm install --omit=dev --workspace=web-hub/server
-
+COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/web-hub/client/dist ./web-hub/client/dist
 COPY --from=builder /app/web-hub/server/dist ./web-hub/server/dist
 

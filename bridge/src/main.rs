@@ -75,6 +75,7 @@ fn get_status(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
         "hub_url": cfg.hub_url,
         "atm_root": cfg.atm_root,
         "device_count": count,
+        "version": updater::CURRENT_VERSION,
         "logs": logs,
     }))
 }
@@ -368,7 +369,7 @@ async fn ws_connection_loop(app: AppHandle) {
                 let register_msg = BridgeToHubMessage::RegisterNode {
                     node_id: node_id.clone(),
                     os: std::env::consts::OS.to_string(),
-                    version: "0.1.0".to_string(),
+                    version: updater::CURRENT_VERSION.to_string(),
                     atm_root: atm_root.clone(),
                 };
                 let _ = tx.send(register_msg);
