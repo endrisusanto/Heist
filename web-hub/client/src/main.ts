@@ -176,6 +176,11 @@ const els = {
   authCardTitle: document.getElementById('authCardTitle') as HTMLElement | null,
   authCardSub: document.getElementById('authCardSub') as HTMLElement | null,
   authStatusBadges: document.getElementById('authStatusBadges') as HTMLElement | null,
+  authCredentialsForm: document.getElementById('authCredentialsForm') as HTMLFormElement | null,
+  authUsername: document.getElementById('authUsername') as HTMLInputElement | null,
+  authPassword: document.getElementById('authPassword') as HTMLInputElement | null,
+  togglePasswordBtn: document.getElementById('togglePasswordBtn') as HTMLButtonElement | null,
+  saveCredentialsBtn: document.getElementById('saveCredentialsBtn') as HTMLButtonElement | null,
   authDropzone: document.getElementById('authDropzone') as HTMLElement | null,
   authFileInput: document.getElementById('authFileInput') as HTMLInputElement | null,
   togglePasteBoxBtn: document.getElementById('togglePasteBoxBtn') as HTMLButtonElement | null,
@@ -192,6 +197,7 @@ const els = {
   hubCategoryInput: document.getElementById('hubCategoryInput') as HTMLInputElement | null,
   hubTitleTemplateInput: document.getElementById('hubTitleTemplateInput') as HTMLInputElement | null,
   hubAutoSubmitInput: document.getElementById('hubAutoSubmitInput') as HTMLInputElement | null,
+  hubHeadlessInput: document.getElementById('hubHeadlessInput') as HTMLInputElement | null,
   hubConfigFeedbackMsg: document.getElementById('hubConfigFeedbackMsg') as HTMLElement | null,
 };
 
@@ -1874,6 +1880,8 @@ interface AuthStatusResponse {
   cookies: Array<{ name: string; domain: string; expires: number; isExpired: boolean }>;
   expiresAt: string | null;
   hasHubSessId: boolean;
+  username?: string;
+  hasCredentials?: boolean;
   message?: string;
 }
 
@@ -1896,10 +1904,14 @@ function renderAuthStatus(data: AuthStatusResponse): void {
 
   if (!els.authCardTitle || !els.authCardSub || !els.authCardDot) return;
 
+  if (data.username && els.authUsername && !els.authUsername.value) {
+    els.authUsername.value = data.username;
+  }
+
   if (data.valid) {
     els.authCardDot.className = 'status-indicator-dot green';
-    els.authCardTitle.textContent = 'Session Aktif & Siap Digunakan';
-    let sub = `Tersimpan ${data.cookiesCount} cookie`;
+    els.authCardTitle.textContent = data.username ? `Session Aktif (${data.username})` : 'Session Aktif & Siap Digunakan';
+    let sub = data.cookiesCount > 0 ? `Tersimpan di auth.json • ${data.cookiesCount} cookie` : 'Kredensial siap digunakan';
     if (data.expiresAt) {
       const expDate = new Date(data.expiresAt);
       sub += ` • Expire: ${expDate.toLocaleDateString()} ${expDate.toLocaleTimeString()}`;
@@ -1907,16 +1919,22 @@ function renderAuthStatus(data: AuthStatusResponse): void {
     els.authCardSub.textContent = sub;
   } else if (data.hasAuth) {
     els.authCardDot.className = 'status-indicator-dot red';
-    els.authCardTitle.textContent = 'Session Telah Kedaluwarsa';
-    els.authCardSub.textContent = data.message || 'Cookie di dalam auth.json sudah expired. Silakan perbarui.';
+    els.authCardTitle.textContent = data.username ? `Session Kedaluwarsa (${data.username})` : 'Session Telah Kedaluwarsa';
+    els.authCardSub.textContent = data.message || 'Kredensial atau cookie di auth.json sudah expired. Silakan perbarui.';
   } else {
     els.authCardDot.className = 'status-indicator-dot gray';
-    els.authCardTitle.textContent = 'Belum Ada Konfigurasi auth.json';
-    els.authCardSub.textContent = 'Upload file auth.json atau paste cookie untuk mengaktifkan auto-submit.';
+    els.authCardTitle.textContent = 'Belum Ada Kredensial SSO';
+    els.authCardSub.textContent = 'Masukkan Username & Password di bawah untuk disimpan ke localStorage & auth.json.';
   }
 
   if (els.authStatusBadges) {
     els.authStatusBadges.innerHTML = '';
+    if (data.username) {
+      const userBadge = document.createElement('span');
+      userBadge.className = 'auth-badge highlight';
+      userBadge.textContent = `User: ${data.username}`;
+      els.authStatusBadges.appendChild(userBadge);
+    }
     for (const c of data.cookies) {
       const badge = document.createElement('span');
       badge.className = 'auth-badge' + (c.isExpired ? ' expired' : c.name.toUpperCase().includes('HUBSESSID') ? ' highlight' : '');
@@ -1936,6 +1954,7 @@ async function loadHubConfig(): Promise<void> {
     if (els.hubCategoryInput) els.hubCategoryInput.value = cfg.category || 'Result';
     if (els.hubTitleTemplateInput) els.hubTitleTemplateInput.value = cfg.titleTemplate || '[{submissionId}][{productName}][{fingerprint}][{carrier}]';
     if (els.hubAutoSubmitInput) els.hubAutoSubmitInput.checked = Boolean(cfg.autoSubmit);
+    if (els.hubHeadlessInput) els.hubHeadlessInput.checked = cfg.headless !== false;
   } catch (err) {
     console.error('Failed to load hub config', err);
   }
@@ -1984,6 +2003,12 @@ function setupSettingsModal(): void {
   if (els.settingsBtn && els.settingsModal) {
     els.settingsBtn.addEventListener('click', () => {
       if (els.settingsModal) els.settingsModal.style.display = 'flex';
+      if (els.authUsername) {
+        els.authUsername.value = localStorage.getItem('heist_sso_username') || '';
+      }
+      if (els.authPassword) {
+        els.authPassword.value = localStorage.getItem('heist_sso_password') || '';
+      }
       loadAuthStatus();
       loadHubConfig();
     });
@@ -2023,7 +2048,63 @@ function setupSettingsModal(): void {
     });
   });
 
-  // Dropzone file upload
+  // Credentials form submit (User & Pass -> localStorage & auth.json)
+  if (els.authCredentialsForm) {
+    els.authCredentialsForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const username = els.authUsername?.value.trim() || '';
+      const password = els.authPassword?.value || '';
+
+      if (!username || !password) {
+        showAuthFeedback('Username dan Password tidak boleh kosong.', 'error');
+        return;
+      }
+
+      // Simpan ke localStorage
+      localStorage.setItem('heist_sso_username', username);
+      localStorage.setItem('heist_sso_password', password);
+
+      if (els.saveCredentialsBtn) {
+        els.saveCredentialsBtn.disabled = true;
+        els.saveCredentialsBtn.textContent = 'Menyimpan...';
+      }
+
+      try {
+        const res = await fetch('/api/settings/auth', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password })
+        });
+        const result = await res.json();
+        if (result.success) {
+          showAuthFeedback(result.message || 'Kredensial disimpan ke localStorage & auth.json!', 'success');
+          loadAuthStatus();
+        } else {
+          showAuthFeedback(result.message || 'Gagal menyimpan kredensial ke server.', 'error');
+        }
+      } catch (err: any) {
+        showAuthFeedback(`Error simpan: ${err.message}`, 'error');
+      } finally {
+        if (els.saveCredentialsBtn) {
+          els.saveCredentialsBtn.disabled = false;
+          els.saveCredentialsBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg><span>Simpan Kredensial</span>';
+        }
+      }
+    });
+  }
+
+  // Password visibility toggle
+  if (els.togglePasswordBtn && els.authPassword) {
+    const toggleBtn = els.togglePasswordBtn;
+    const passInput = els.authPassword;
+    toggleBtn.addEventListener('click', () => {
+      const isPass = passInput.type === 'password';
+      passInput.type = isPass ? 'text' : 'password';
+      toggleBtn.textContent = isPass ? '🔒' : '👁️';
+    });
+  }
+
+  // Dropzone file upload (optional fallback)
   if (els.authDropzone && els.authFileInput) {
     els.authDropzone.addEventListener('click', () => {
       els.authFileInput?.click();
@@ -2140,7 +2221,7 @@ function setupSettingsModal(): void {
       } finally {
         if (els.launchBrowserLoginBtn) {
           els.launchBrowserLoginBtn.disabled = false;
-          els.launchBrowserLoginBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg><span>Login via Browser</span>';
+          els.launchBrowserLoginBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1 4-10z"/></svg><span>Login via Browser</span>';
         }
       }
     });
@@ -2149,10 +2230,14 @@ function setupSettingsModal(): void {
   // Clear auth button
   if (els.clearAuthBtn) {
     els.clearAuthBtn.addEventListener('click', async () => {
-      if (!confirm('Hapus file auth.json tersimpan?')) return;
+      if (!confirm('Hapus kredensial tersimpan dan file auth.json?')) return;
       try {
+        localStorage.removeItem('heist_sso_username');
+        localStorage.removeItem('heist_sso_password');
+        if (els.authUsername) els.authUsername.value = '';
+        if (els.authPassword) els.authPassword.value = '';
         await fetch('/api/settings/auth', { method: 'DELETE' });
-        showAuthFeedback('auth.json telah dihapus.', 'info');
+        showAuthFeedback('Kredensial dan auth.json telah dihapus.', 'info');
         loadAuthStatus();
       } catch (err: any) {
         showAuthFeedback(`Gagal menghapus: ${err.message}`, 'error');
@@ -2169,7 +2254,8 @@ function setupSettingsModal(): void {
         boardSrl: els.hubBoardSrlInput?.value.trim() || '',
         category: els.hubCategoryInput?.value.trim() || 'Result',
         titleTemplate: els.hubTitleTemplateInput?.value.trim() || '[{submissionId}][{productName}][{fingerprint}][{carrier}]',
-        autoSubmit: Boolean(els.hubAutoSubmitInput?.checked)
+        autoSubmit: Boolean(els.hubAutoSubmitInput?.checked),
+        headless: els.hubHeadlessInput ? Boolean(els.hubHeadlessInput.checked) : true
       };
 
       try {
@@ -2196,6 +2282,12 @@ document.addEventListener('DOMContentLoaded', () => {
   setupTheme();
   setupAccordions();
   setupEventListeners();
+  if (els.authUsername && !els.authUsername.value) {
+    els.authUsername.value = localStorage.getItem('heist_sso_username') || '';
+  }
+  if (els.authPassword && !els.authPassword.value) {
+    els.authPassword.value = localStorage.getItem('heist_sso_password') || '';
+  }
   loadAuthStatus();
   loadHubConfig();
   renderAll();

@@ -6,6 +6,7 @@ mod runner;
 mod scanner;
 mod types;
 mod updater;
+mod hub_submit;
 
 use futures_util::{SinkExt, StreamExt};
 use runner::RunnerState;
@@ -604,6 +605,10 @@ fn handle_hub_command(
                     },
                 });
             });
+        }
+        HubToBridgeMessage::SubmitToHub(payload) => {
+            emit_log(app, "info", &format!("Mobile R&D Hub submission requested for \"{}\"", payload.title));
+            hub_submit::execute_hub_submission(app.clone(), payload, tx.clone());
         }
         HubToBridgeMessage::Ping => {
             let _ = tx.send(BridgeToHubMessage::Heartbeat {

@@ -5,6 +5,7 @@ import zlib from 'zlib';
 import child_process from 'child_process';
 import { fileURLToPath } from 'url';
 import { WebSocketServer, WebSocket } from 'ws';
+import { EventEmitter } from 'events';
 import { DeviceInfo, FleetState, NodeState, RunBatchPayload } from './types.js';
 import {
   getHubConfig,
@@ -14,7 +15,8 @@ import {
   deleteAuth,
   verifyHubSession,
   launchInteractiveLogin,
-  submitToMobileRndHub
+  submitToMobileRndHub,
+  getAuthFilePath
 } from './authManager.js';
 
 const PORT = parseInt(process.env.PORT || '4020', 10);
@@ -54,6 +56,7 @@ const activeRunsMap = new Map<string, import('./types.js').ActiveRun>();
 // WebSocket connections
 const bridgeConnections = new Map<string, WebSocket>(); // nodeId -> WebSocket
 const uiConnections = new Set<WebSocket>();
+const bridgeActionEmitter = new EventEmitter();
 
 function getFleetPayload(): FleetState {
   const busySerials = new Set<string>();
@@ -1566,7 +1569,7 @@ const server = http.createServer((req, res) => {
 
   // Submit to Mobile R&D Hub endpoint
   if (req.url === '/api/hub/submit' && req.method === 'POST') {
-    readJsonBody(req).then((raw) => {
+    readJsonBody(req).then(async (raw) => {
       const payload = JSON.parse(raw || '{}');
       const title = payload.title || 'ATM Test Result';
       const category = payload.category || 'Result';
@@ -1574,9 +1577,75 @@ const server = http.createServer((req, res) => {
       const pda = payload.pda || '';
       const model = payload.model || '';
       const activeTools = payload.tools ? (Array.isArray(payload.tools) ? payload.tools : [payload.tools]) : ['all'];
+      const requestedNodeId = payload.nodeId || '';
 
       const archiveBuffer = getMasterArchiveZipBuffer(pda, model, activeTools);
 
+      // Delegate to intranet-connected Bridge if online
+      let targetNodeId = requestedNodeId && bridgeConnections.has(requestedNodeId) ? requestedNodeId : '';
+      if (!targetNodeId && bridgeConnections.size > 0) {
+        targetNodeId = Array.from(bridgeConnections.keys())[0];
+      }
+
+      const bridgeWs = targetNodeId ? bridgeConnections.get(targetNodeId) : null;
+
+      if (bridgeWs && bridgeWs.readyState === WebSocket.OPEN) {
+        console.log(`[SubmitHub] Delegating Playwright submission to Bridge "${targetNodeId}"...`);
+        pushLog(`[${targetNodeId}][hub_submit] Memulai otomasi submission via Bridge "${targetNodeId}"...`);
+
+        const authPath = getAuthFilePath();
+        let authData: any = {};
+        try {
+          if (fs.existsSync(authPath)) {
+            authData = JSON.parse(fs.readFileSync(authPath, 'utf-8'));
+          }
+        } catch {}
+
+        const hubConfig = getHubConfig();
+        const submitMsg = {
+          type: 'SubmitToHub',
+          payload: {
+            title,
+            category,
+            hub_base_url: hubConfig.hubBaseUrl,
+            board_srl: hubConfig.boardSrl,
+            archive_filename: archiveName,
+            archive_base64: archiveBuffer ? archiveBuffer.toString('base64') : '',
+            cookies: authData.cookies || [],
+            username: authData.username || '',
+            password: authData.password || '',
+            headless: hubConfig.headless !== false
+          }
+        };
+
+        bridgeWs.send(JSON.stringify(submitMsg));
+
+        const timeoutMs = 90000;
+        const result = await new Promise<{ ok: boolean; message: string }>((resolve) => {
+          const handler = (data: any) => {
+            clearTimeout(timer);
+            resolve({ ok: Boolean(data.success), message: data.message || (data.success ? 'Berhasil submit' : 'Gagal submit') });
+          };
+
+          const eventName = `action:${targetNodeId}:submit_hub`;
+          bridgeActionEmitter.once(eventName, handler);
+
+          const timer = setTimeout(() => {
+            bridgeActionEmitter.removeListener(eventName, handler);
+            resolve({
+              ok: false,
+              message: `Timeout menunggu respons submission dari node "${targetNodeId}" (${timeoutMs / 1000}s).`
+            });
+          }, timeoutMs);
+        });
+
+        res.writeHead(result.ok ? 200 : 400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(result));
+        return;
+      }
+
+      // Local fallback on Web-Hub server if no Bridge is connected
+      console.log('[SubmitHub] No active Bridge connected. Running Playwright locally on Web-Hub...');
       submitToMobileRndHub({
         title,
         category,
@@ -1861,6 +1930,8 @@ wssBridge.on('connection', (ws, req) => {
         case 'ActionResult':
         case 'ActionResponse': {
           pushLog(`[${boundNodeId}] Action ${payload.action}: ${payload.message}`, payload.success ? 'success' : 'err');
+          bridgeActionEmitter.emit(`action:${boundNodeId}:${payload.action}`, payload);
+          bridgeActionEmitter.emit(`action:*:${payload.action}`, { ...payload, nodeId: boundNodeId });
           broadcastToUI({
             type: 'ACTION_RESPONSE',
             payload: {

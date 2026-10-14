@@ -26,6 +26,9 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=4020
 ENV DATA_DIR=/data
+ENV CHROMIUM_PATH=/usr/bin/chromium-browser
+
+RUN apk add --no-cache chromium nss freetype harfbuzz ttf-freefont
 
 COPY package.json ./
 COPY web-hub/server/package.json ./web-hub/server/

@@ -128,6 +128,35 @@ pub enum BridgeToHubMessage {
     },
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubmitHubPayload {
+    pub title: String,
+    #[serde(default)]
+    pub category: String,
+    #[serde(default)]
+    pub hub_base_url: String,
+    #[serde(default)]
+    pub board_srl: String,
+    #[serde(default)]
+    pub archive_path: Option<String>,
+    #[serde(default)]
+    pub archive_base64: Option<String>,
+    #[serde(default)]
+    pub archive_filename: Option<String>,
+    #[serde(default)]
+    pub cookies: serde_json::Value,
+    #[serde(default)]
+    pub username: Option<String>,
+    #[serde(default)]
+    pub password: Option<String>,
+    #[serde(default = "default_headless_true")]
+    pub headless: bool,
+}
+
+fn default_headless_true() -> bool {
+    true
+}
+
 /// Messages received by Bridge from Hub Server
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload")]
@@ -155,6 +184,7 @@ pub enum HubToBridgeMessage {
     UpdateBridge {
         download_url: Option<String>,
     },
+    SubmitToHub(SubmitHubPayload),
     Ping,
 }
 

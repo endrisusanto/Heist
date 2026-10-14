@@ -1,0 +1,10 @@
+{
+  "name": "heist-bridge-engine",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Playwright submission engine for Heist Bridge",
+  "main": "runner.mjs",
+  "dependencies": {
+    "playwright": "^1.50.1"
+  }
+}

@@ -302,7 +302,7 @@
           <!-- Settings Tab Navigation -->
           <div class="settings-tabs-bar">
             <button class="settings-tab-btn active" data-tab="sso">
-              <span>SSO Authentication (auth.json)</span>
+              <span>SSO Authentication</span>
             </button>
             <button class="settings-tab-btn" data-tab="hub">
               <span>Mobile R&D Hub Configuration</span>
@@ -318,54 +318,56 @@
                   <div class="status-indicator-dot gray" id="authCardDot"></div>
                   <div class="auth-status-text-wrap">
                     <h4 class="auth-status-title" id="authCardTitle">Memeriksa status session...</h4>
-                    <p class="auth-status-sub" id="authCardSub">Sedang memuat data auth.json</p>
+                    <p class="auth-status-sub" id="authCardSub">Sedang memuat data kredensial...</p>
                   </div>
                 </div>
                 <div class="auth-status-badges" id="authStatusBadges"></div>
               </div>
 
-              <!-- Upload / Input Card -->
-              <div class="settings-section">
-                <label class="section-label">Update auth.json (Playwright StorageState)</label>
-                <div class="auth-dropzone" id="authDropzone">
-                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                    <polyline points="17 8 12 3 7 8"></polyline>
-                    <line x1="12" y1="3" x2="12" y2="15"></line>
-                  </svg>
-                  <p class="dropzone-text">Tarik & lepas file <strong>auth.json</strong> di sini, atau <span class="browse-link">pilih file</span></p>
-                  <input type="file" id="authFileInput" accept=".json,application/json" style="display:none;" />
+              <!-- Form Input User & Pass -->
+              <form id="authCredentialsForm" class="settings-form" style="margin-top: 14px;">
+                <div class="form-field-group">
+                  <label for="authUsername">Username SSO / Hub</label>
+                  <input type="text" id="authUsername" class="custom-input" placeholder="Masukkan username SSO" autocomplete="username" />
+                  <span class="field-hint">Disimpan di localStorage browser & disinkronkan ke auth.json server</span>
                 </div>
-              </div>
 
-              <!-- Paste Raw Cookie or JSON -->
-              <div class="settings-section">
-                <div class="section-label-row">
-                  <label class="section-label">Atau Paste Cookie / JSON</label>
-                  <button type="button" class="btn-text-link" id="togglePasteBoxBtn">Tampilkan Editor</button>
-                </div>
-                <div id="pasteBoxContainer" style="display:none;">
-                  <textarea id="authRawInput" class="custom-textarea" rows="4" placeholder="Paste Playwright auth.json ATAU raw cookie: HUBSESSID=xxxx; domain=.mobilerndhub..."></textarea>
-                  <div class="form-actions-row">
-                    <button type="button" id="saveAuthTextBtn" class="btn btn-blue btn-sm">Simpan Cookie / JSON</button>
+                <div class="form-field-group" style="margin-top: 10px;">
+                  <label for="authPassword">Password SSO</label>
+                  <div style="position: relative; display: flex; align-items: center;">
+                    <input type="password" id="authPassword" class="custom-input" style="padding-right: 36px;" placeholder="Masukkan password SSO" autocomplete="current-password" />
+                    <button type="button" id="togglePasswordBtn" style="position: absolute; right: 8px; background: none; border: none; cursor: pointer; color: var(--text-muted); font-size: 14px; padding: 2px;" title="Lihat / sembunyikan password">👁️</button>
                   </div>
                 </div>
-              </div>
 
-              <!-- Auth Action Buttons -->
-              <div class="settings-actions-bar">
-                <button type="button" id="testAuthBtn" class="btn btn-secondary-sm">
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
-                  <span>Test Session</span>
-                </button>
-                <button type="button" id="launchBrowserLoginBtn" class="btn btn-blue btn-sm" title="Buka browser untuk login SSO interaktif">
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
-                  <span>Login via Browser</span>
-                </button>
-                <button type="button" id="clearAuthBtn" class="btn btn-danger-sm">
-                  <span>Hapus Auth</span>
-                </button>
-              </div>
+                <div class="settings-actions-bar" style="margin-top: 16px;">
+                  <button type="submit" id="saveCredentialsBtn" class="btn btn-blue btn-sm">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+                    <span>Simpan Kredensial</span>
+                  </button>
+
+                  <button type="button" id="testAuthBtn" class="btn btn-secondary-sm">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+                    <span>Test Session</span>
+                  </button>
+
+                  <button type="button" id="clearAuthBtn" class="btn btn-danger-sm">
+                    <span>Hapus</span>
+                  </button>
+                </div>
+              </form>
+
+              <!-- Opsi Lanjutan (Manual Cookie / File auth.json) -->
+              <details style="margin-top: 16px; font-size: 11px; color: var(--text-muted);">
+                <summary style="cursor: pointer; user-select: none;">Opsi Lanjutan (Manual Cookie / File auth.json)</summary>
+                <div style="margin-top: 8px; display: flex; flex-direction: column; gap: 8px;">
+                  <textarea id="authRawInput" class="custom-textarea" rows="2" placeholder="Paste manual HUBSESSID=xxxx atau Playwright JSON jika diperlukan..."></textarea>
+                  <div style="display: flex; gap: 8px;">
+                    <button type="button" id="saveAuthTextBtn" class="btn btn-secondary-sm">Simpan Cookie Manual</button>
+                    <button type="button" id="launchBrowserLoginBtn" class="btn btn-secondary-sm" title="Buka browser untuk login SSO interaktif">Login via Browser</button>
+                  </div>
+                </div>
+              </details>
 
               <div id="authFeedbackMsg" class="settings-feedback-msg" style="display:none;"></div>
             </div>
@@ -375,14 +377,8 @@
               <form id="hubConfigForm" class="settings-form">
                 <div class="form-field-group">
                   <label for="hubBaseUrlInput">Mobile R&D Hub Base URL</label>
-                  <input type="text" id="hubBaseUrlInput" class="custom-input" placeholder="contoh: https://mobilerndhub.sec.samsung.net/hub" />
+                  <input type="text" id="hubBaseUrlInput" class="custom-input" placeholder="contoh: https://mobilerndhub.sec.samsung.net/hub/site/gcim/board/submission/write" />
                   <span class="field-hint">URL halaman web Mobile R&D Hub intranet.</span>
-                </div>
-
-                <div class="form-field-group">
-                  <label for="hubBoardSrlInput">Board SRL / Identifier</label>
-                  <input type="text" id="hubBoardSrlInput" class="custom-input" placeholder="contoh: 12345" />
-                  <span class="field-hint">ID board target pada Mobile R&D Hub (bisa dilihat dari URL board).</span>
                 </div>
 
                 <div class="form-field-group">
@@ -402,6 +398,14 @@
                     <input type="checkbox" id="hubAutoSubmitInput" />
                     <span>Otomatis Submit ke Hub setelah test selesai (Auto-Push)</span>
                   </label>
+                </div>
+
+                <div class="form-field-group checkbox-group">
+                  <label class="custom-checkbox-label">
+                    <input type="checkbox" id="hubHeadlessInput" checked />
+                    <span>Jalankan Playwright dalam mode Headless (latar belakang)</span>
+                  </label>
+                  <span class="field-hint">Nonaktifkan jika ingin melihat browser terbuka secara visual (memerlukan display/GUI).</span>
                 </div>
 
                 <div class="form-actions-row">
