@@ -1,7 +1,6 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { chromium } from 'playwright';
 
 export interface HubConfig {
   hubBaseUrl: string;
@@ -399,6 +398,15 @@ function parseCookieString(cookieStr: string): PlaywrightStorageState {
   };
 }
 
+async function getChromium(): Promise<any | null> {
+  try {
+    const pw: any = await import('' + 'playwright');
+    return pw.chromium || null;
+  } catch {
+    return null;
+  }
+}
+
 function getChromiumLaunchOptions(headless = true): any {
   const options: any = {
     headless,
@@ -443,6 +451,11 @@ export async function loginWithCredentials(userParam?: string, passParam?: strin
 
   if (!username || !password) {
     return { ok: false, status: 400, message: 'Username dan Password belum tersimpan.' };
+  }
+
+  const chromium = await getChromium();
+  if (!chromium) {
+    return { ok: false, status: 400, message: 'Playwright tidak terpasang di server. Gunakan ekstensi browser untuk menyimpan session cookies ke auth.json.' };
   }
 
   let browser;
@@ -582,6 +595,11 @@ export async function launchInteractiveLogin(): Promise<{ ok: boolean; message: 
     };
   }
 
+  const chromium = await getChromium();
+  if (!chromium) {
+    return { ok: false, message: 'Browser login tidak tersedia di server. Gunakan ekstensi browser pada PC intranet untuk sync session.' };
+  }
+
   let browser;
   try {
     const launchOpts = getChromiumLaunchOptions(false);
@@ -600,7 +618,7 @@ export async function launchInteractiveLogin(): Promise<{ ok: boolean; message: 
     const pollInterval = setInterval(async () => {
       try {
         const cookies = await context.cookies();
-        const hasHubSess = cookies.some((c) => c.name.toUpperCase().includes('HUBSESSID'));
+        const hasHubSess = cookies.some((c: any) => c.name.toUpperCase().includes('HUBSESSID'));
         if (hasHubSess && !cookiesCaptured) {
           cookiesCaptured = true;
           const storage = await context.storageState();
@@ -670,6 +688,12 @@ export async function submitToMobileRndHub(payload: {
   if (!fs.existsSync(authPath)) {
     console.error(`[SubmitHub] [GAGAL] File auth.json tidak ditemukan di ${authPath}`);
     return { ok: false, message: 'File auth.json tidak ditemukan.' };
+  }
+
+  const chromium = await getChromium();
+  if (!chromium) {
+    console.error(`[SubmitHub] [GAGAL] Playwright tidak terpasang di server.`);
+    return { ok: false, message: 'Playwright tidak aktif di server Hub. Pastikan node Bridge terhubung untuk menjalankan submission via intranet.' };
   }
 
   let browser;
