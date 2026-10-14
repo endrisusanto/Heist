@@ -1362,7 +1362,7 @@ function createZipBuffer(files: Array<{ name: string; content: string | Buffer }
 }
 
 // HTTP Server with static file serving
-const server = http.createServer((req, res) => {
+const server = http.createServer(async (req, res) => {
   if (req.url === '/api/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ status: 'ok', nodes: Object.keys(fleetState.nodes).length, timestamp: Date.now() }));
@@ -1441,8 +1441,75 @@ const server = http.createServer((req, res) => {
   }
 
   if (req.url === '/api/settings/auth/test' && req.method === 'POST') {
+    let reqBody: any = {};
+    try {
+      const raw = await readJsonBody(req);
+      if (raw && raw.trim().length > 0) reqBody = JSON.parse(raw);
+    } catch {}
+
+    let targetNodeId = reqBody.nodeId || '';
+    if (!targetNodeId || !bridgeConnections.has(targetNodeId)) {
+      const activeIds = Array.from(bridgeConnections.keys()).filter(id => {
+        const ws = bridgeConnections.get(id);
+        return ws && ws.readyState === WebSocket.OPEN;
+      });
+      activeIds.sort((a, b) => {
+        const vA = fleetState.nodes[a]?.version || '';
+        const vB = fleetState.nodes[b]?.version || '';
+        return vB.localeCompare(vA, undefined, { numeric: true });
+      });
+      targetNodeId = activeIds[0] || '';
+    }
+
+    const bridgeWs = targetNodeId ? bridgeConnections.get(targetNodeId) : null;
+
+    if (bridgeWs && bridgeWs.readyState === WebSocket.OPEN) {
+      console.log(`[AuthTest] Delegating cookie verification to Bridge node "${targetNodeId}"...`);
+      const authPath = getAuthFilePath();
+      let authData: any = {};
+      try {
+        if (fs.existsSync(authPath)) {
+          authData = JSON.parse(fs.readFileSync(authPath, 'utf-8'));
+        }
+      } catch {}
+
+      const hubConfig = getHubConfig();
+      const checkMsg = {
+        type: 'CheckAuth',
+        payload: {
+          hub_base_url: hubConfig.hubBaseUrl,
+          cookies: authData.cookies || []
+        }
+      };
+
+      bridgeWs.send(JSON.stringify(checkMsg));
+
+      const timeoutMs = 15000;
+      const result = await new Promise<{ ok: boolean; message: string }>((resolve) => {
+        const handler = (data: any) => {
+          clearTimeout(timer);
+          resolve({ ok: Boolean(data.success), message: `[Node: ${targetNodeId}] ${data.message}` });
+        };
+
+        const eventName = `action:${targetNodeId}:check_auth`;
+        bridgeActionEmitter.once(eventName, handler);
+
+        const timer = setTimeout(() => {
+          bridgeActionEmitter.removeListener(eventName, handler);
+          resolve({
+            ok: false,
+            message: `Timeout verifikasi koneksi dari node "${targetNodeId}" (${timeoutMs / 1000}s).`
+          });
+        }, timeoutMs);
+      });
+
+      res.writeHead(result.ok ? 200 : 400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(result));
+      return;
+    }
+
     verifyHubSession().then((result) => {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.writeHead(result.ok ? 200 : 400, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(result));
     }).catch((err) => {
       res.writeHead(500, { 'Content-Type': 'application/json' });

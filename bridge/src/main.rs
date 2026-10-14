@@ -610,6 +610,10 @@ fn handle_hub_command(
             emit_log(app, "info", &format!("Mobile R&D Hub submission requested for \"{}\"", payload.title));
             hub_submit::execute_hub_submission(app.clone(), payload, tx.clone());
         }
+        HubToBridgeMessage::CheckAuth(payload) => {
+            emit_log(app, "info", "Verifying Mobile R&D Hub portal session cookies...");
+            hub_submit::check_hub_auth(app.clone(), payload, tx.clone());
+        }
         HubToBridgeMessage::Ping => {
             let _ = tx.send(BridgeToHubMessage::Heartbeat {
                 timestamp: std::time::SystemTime::now()

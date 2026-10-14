@@ -176,19 +176,9 @@ const els = {
   authCardTitle: document.getElementById('authCardTitle') as HTMLElement | null,
   authCardSub: document.getElementById('authCardSub') as HTMLElement | null,
   authStatusBadges: document.getElementById('authStatusBadges') as HTMLElement | null,
-  authCredentialsForm: document.getElementById('authCredentialsForm') as HTMLFormElement | null,
-  authUsername: document.getElementById('authUsername') as HTMLInputElement | null,
-  authPassword: document.getElementById('authPassword') as HTMLInputElement | null,
-  togglePasswordBtn: document.getElementById('togglePasswordBtn') as HTMLButtonElement | null,
-  saveCredentialsBtn: document.getElementById('saveCredentialsBtn') as HTMLButtonElement | null,
-  authDropzone: document.getElementById('authDropzone') as HTMLElement | null,
-  authFileInput: document.getElementById('authFileInput') as HTMLInputElement | null,
-  togglePasteBoxBtn: document.getElementById('togglePasteBoxBtn') as HTMLButtonElement | null,
-  pasteBoxContainer: document.getElementById('pasteBoxContainer') as HTMLElement | null,
   authRawInput: document.getElementById('authRawInput') as HTMLTextAreaElement | null,
   saveAuthTextBtn: document.getElementById('saveAuthTextBtn') as HTMLButtonElement | null,
   testAuthBtn: document.getElementById('testAuthBtn') as HTMLButtonElement | null,
-  launchBrowserLoginBtn: document.getElementById('launchBrowserLoginBtn') as HTMLButtonElement | null,
   clearAuthBtn: document.getElementById('clearAuthBtn') as HTMLButtonElement | null,
   authFeedbackMsg: document.getElementById('authFeedbackMsg') as HTMLElement | null,
   hubConfigForm: document.getElementById('hubConfigForm') as HTMLFormElement | null,
@@ -1902,29 +1892,25 @@ function renderAuthStatus(data: AuthStatusResponse): void {
     els.authStatusDot.title = data.valid ? 'SSO Auth: Aktif' : data.hasAuth ? 'SSO Auth: Expired' : 'SSO Auth: Belum Ada';
   }
 
-  if (!els.authCardTitle || !els.authCardSub || !els.authCardDot) return;
-
-  if (data.username && els.authUsername && !els.authUsername.value) {
-    els.authUsername.value = data.username;
-  }
-
-  if (data.valid) {
-    els.authCardDot.className = 'status-indicator-dot green';
-    els.authCardTitle.textContent = data.username ? `Session Aktif (${data.username})` : 'Session Aktif & Siap Digunakan';
-    let sub = data.cookiesCount > 0 ? `Tersimpan di auth.json • ${data.cookiesCount} cookie` : 'Kredensial siap digunakan';
-    if (data.expiresAt) {
-      const expDate = new Date(data.expiresAt);
-      sub += ` • Expire: ${expDate.toLocaleDateString()} ${expDate.toLocaleTimeString()}`;
+  if (els.authCardDot && els.authCardTitle && els.authCardSub) {
+    if (data.valid) {
+      els.authCardDot.className = 'status-indicator-dot green';
+      els.authCardTitle.textContent = data.username ? `Session Aktif (${data.username})` : 'Session Cookies Aktif';
+      let sub = data.cookiesCount > 0 ? `Tersimpan di auth.json • ${data.cookiesCount} cookie` : 'Cookies aktif';
+      if (data.expiresAt) {
+        const expDate = new Date(data.expiresAt);
+        sub += ` • Expire: ${expDate.toLocaleDateString()} ${expDate.toLocaleTimeString()}`;
+      }
+      els.authCardSub.textContent = sub;
+    } else if (data.hasAuth) {
+      els.authCardDot.className = 'status-indicator-dot red';
+      els.authCardTitle.textContent = data.username ? `Session Kedaluwarsa (${data.username})` : 'Session Telah Kedaluwarsa';
+      els.authCardSub.textContent = data.message || 'Cookies di auth.json sudah expired. Silakan perbarui.';
+    } else {
+      els.authCardDot.className = 'status-indicator-dot gray';
+      els.authCardTitle.textContent = 'Belum Ada Session Cookies';
+      els.authCardSub.textContent = 'Paste cookies dari ekstensi browser Auto-Fill atau DevTools di bawah.';
     }
-    els.authCardSub.textContent = sub;
-  } else if (data.hasAuth) {
-    els.authCardDot.className = 'status-indicator-dot red';
-    els.authCardTitle.textContent = data.username ? `Session Kedaluwarsa (${data.username})` : 'Session Telah Kedaluwarsa';
-    els.authCardSub.textContent = data.message || 'Kredensial atau cookie di auth.json sudah expired. Silakan perbarui.';
-  } else {
-    els.authCardDot.className = 'status-indicator-dot gray';
-    els.authCardTitle.textContent = 'Belum Ada Kredensial SSO';
-    els.authCardSub.textContent = 'Masukkan Username & Password di bawah untuk disimpan ke localStorage & auth.json.';
   }
 
   if (els.authStatusBadges) {
@@ -2003,12 +1989,6 @@ function setupSettingsModal(): void {
   if (els.settingsBtn && els.settingsModal) {
     els.settingsBtn.addEventListener('click', () => {
       if (els.settingsModal) els.settingsModal.style.display = 'flex';
-      if (els.authUsername) {
-        els.authUsername.value = localStorage.getItem('heist_sso_username') || '';
-      }
-      if (els.authPassword) {
-        els.authPassword.value = localStorage.getItem('heist_sso_password') || '';
-      }
       loadAuthStatus();
       loadHubConfig();
     });
@@ -2048,117 +2028,7 @@ function setupSettingsModal(): void {
     });
   });
 
-  // Credentials form submit (User & Pass -> localStorage & auth.json)
-  if (els.authCredentialsForm) {
-    els.authCredentialsForm.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const username = els.authUsername?.value.trim() || '';
-      const password = els.authPassword?.value || '';
-
-      if (!username || !password) {
-        showAuthFeedback('Username dan Password tidak boleh kosong.', 'error');
-        return;
-      }
-
-      // Simpan ke localStorage
-      localStorage.setItem('heist_sso_username', username);
-      localStorage.setItem('heist_sso_password', password);
-
-      if (els.saveCredentialsBtn) {
-        els.saveCredentialsBtn.disabled = true;
-        els.saveCredentialsBtn.textContent = 'Menyimpan...';
-      }
-
-      try {
-        const res = await fetch('/api/settings/auth', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username, password })
-        });
-        const result = await res.json();
-        if (result.success) {
-          showAuthFeedback(result.message || 'Kredensial disimpan ke localStorage & auth.json!', 'success');
-          loadAuthStatus();
-        } else {
-          showAuthFeedback(result.message || 'Gagal menyimpan kredensial ke server.', 'error');
-        }
-      } catch (err: any) {
-        showAuthFeedback(`Error simpan: ${err.message}`, 'error');
-      } finally {
-        if (els.saveCredentialsBtn) {
-          els.saveCredentialsBtn.disabled = false;
-          els.saveCredentialsBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg><span>Simpan Kredensial</span>';
-        }
-      }
-    });
-  }
-
-  // Password visibility toggle
-  if (els.togglePasswordBtn && els.authPassword) {
-    const toggleBtn = els.togglePasswordBtn;
-    const passInput = els.authPassword;
-    toggleBtn.addEventListener('click', () => {
-      const isPass = passInput.type === 'password';
-      passInput.type = isPass ? 'text' : 'password';
-      toggleBtn.textContent = isPass ? '🔒' : '👁️';
-    });
-  }
-
-  // Dropzone file upload (optional fallback)
-  if (els.authDropzone && els.authFileInput) {
-    els.authDropzone.addEventListener('click', () => {
-      els.authFileInput?.click();
-    });
-
-    els.authDropzone.addEventListener('dragover', (e) => {
-      e.preventDefault();
-      els.authDropzone?.classList.add('drag-over');
-    });
-
-    els.authDropzone.addEventListener('dragleave', () => {
-      els.authDropzone?.classList.remove('drag-over');
-    });
-
-    els.authDropzone.addEventListener('drop', (e) => {
-      e.preventDefault();
-      els.authDropzone?.classList.remove('drag-over');
-      if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
-        handleAuthFile(e.dataTransfer.files[0]);
-      }
-    });
-
-    els.authFileInput.addEventListener('change', () => {
-      if (els.authFileInput?.files && els.authFileInput.files.length > 0) {
-        handleAuthFile(els.authFileInput.files[0]);
-      }
-    });
-  }
-
-  function handleAuthFile(file: File) {
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      const text = ev.target?.result as string;
-      if (text) sendAuthPayload(text);
-    };
-    reader.onerror = () => {
-      showAuthFeedback('Gagal membaca file.', 'error');
-    };
-    reader.readAsText(file);
-  }
-
-  // Toggle raw paste box
-  if (els.togglePasteBoxBtn && els.pasteBoxContainer) {
-    els.togglePasteBoxBtn.addEventListener('click', () => {
-      if (!els.pasteBoxContainer) return;
-      const isHidden = els.pasteBoxContainer.style.display === 'none';
-      els.pasteBoxContainer.style.display = isHidden ? 'block' : 'none';
-      if (els.togglePasteBoxBtn) {
-        els.togglePasteBoxBtn.textContent = isHidden ? 'Sembunyikan Editor' : 'Tampilkan Editor';
-      }
-    });
-  }
-
-  // Save raw text button
+  // Save raw cookies text button
   if (els.saveAuthTextBtn && els.authRawInput) {
     els.saveAuthTextBtn.addEventListener('click', () => {
       const val = els.authRawInput?.value.trim();
@@ -2170,58 +2040,30 @@ function setupSettingsModal(): void {
     });
   }
 
-  // Test session button
+  // Test session button (check connection)
   if (els.testAuthBtn) {
     els.testAuthBtn.addEventListener('click', async () => {
       if (els.testAuthBtn) {
         els.testAuthBtn.disabled = true;
         els.testAuthBtn.textContent = 'Menguji koneksi...';
       }
-      showAuthFeedback('Menguji koneksi ke Mobile R&D Hub...', 'info');
+      showAuthFeedback('Menguji koneksi cookies ke Mobile R&D Hub via intranet...', 'info');
 
       try {
         const res = await fetch('/api/settings/auth/test', { method: 'POST' });
         const result = await res.json();
         if (result.ok) {
           showAuthFeedback(`[OK] ${result.message}`, 'success');
+          loadAuthStatus();
         } else {
           showAuthFeedback(`[Gagal] ${result.message}`, 'error');
         }
       } catch (err: any) {
-        showAuthFeedback(`Gagal test session: ${err.message}`, 'error');
+        showAuthFeedback(`Gagal cek koneksi: ${err.message}`, 'error');
       } finally {
         if (els.testAuthBtn) {
           els.testAuthBtn.disabled = false;
-          els.testAuthBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg><span>Test Session</span>';
-        }
-      }
-    });
-  }
-
-  // Launch browser login button
-  if (els.launchBrowserLoginBtn) {
-    els.launchBrowserLoginBtn.addEventListener('click', async () => {
-      if (els.launchBrowserLoginBtn) {
-        els.launchBrowserLoginBtn.disabled = true;
-        els.launchBrowserLoginBtn.textContent = 'Membuka Browser...';
-      }
-      showAuthFeedback('Membuka browser Playwright. Silakan login pada browser window yang terbuka...', 'info');
-
-      try {
-        const res = await fetch('/api/settings/auth/login-browser', { method: 'POST' });
-        const result = await res.json();
-        if (result.ok) {
-          showAuthFeedback(result.message, 'success');
-          loadAuthStatus();
-        } else {
-          showAuthFeedback(result.message, 'error');
-        }
-      } catch (err: any) {
-        showAuthFeedback(`Gagal meluncurkan browser: ${err.message}`, 'error');
-      } finally {
-        if (els.launchBrowserLoginBtn) {
-          els.launchBrowserLoginBtn.disabled = false;
-          els.launchBrowserLoginBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1 4-10z"/></svg><span>Login via Browser</span>';
+          els.testAuthBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg><span>Cek Koneksi Cookies</span>';
         }
       }
     });
@@ -2230,14 +2072,11 @@ function setupSettingsModal(): void {
   // Clear auth button
   if (els.clearAuthBtn) {
     els.clearAuthBtn.addEventListener('click', async () => {
-      if (!confirm('Hapus kredensial tersimpan dan file auth.json?')) return;
+      if (!confirm('Hapus cookies session tersimpan di auth.json?')) return;
       try {
-        localStorage.removeItem('heist_sso_username');
-        localStorage.removeItem('heist_sso_password');
-        if (els.authUsername) els.authUsername.value = '';
-        if (els.authPassword) els.authPassword.value = '';
+        if (els.authRawInput) els.authRawInput.value = '';
         await fetch('/api/settings/auth', { method: 'DELETE' });
-        showAuthFeedback('Kredensial dan auth.json telah dihapus.', 'info');
+        showAuthFeedback('Cookies session telah dihapus dari auth.json.', 'info');
         loadAuthStatus();
       } catch (err: any) {
         showAuthFeedback(`Gagal menghapus: ${err.message}`, 'error');
@@ -2282,12 +2121,6 @@ document.addEventListener('DOMContentLoaded', () => {
   setupTheme();
   setupAccordions();
   setupEventListeners();
-  if (els.authUsername && !els.authUsername.value) {
-    els.authUsername.value = localStorage.getItem('heist_sso_username') || '';
-  }
-  if (els.authPassword && !els.authPassword.value) {
-    els.authPassword.value = localStorage.getItem('heist_sso_password') || '';
-  }
   loadAuthStatus();
   loadHubConfig();
   renderAll();

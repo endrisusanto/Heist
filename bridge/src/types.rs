@@ -157,6 +157,13 @@ fn default_headless_true() -> bool {
     true
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CheckAuthPayload {
+    pub hub_base_url: String,
+    #[serde(default)]
+    pub cookies: serde_json::Value,
+}
+
 /// Messages received by Bridge from Hub Server
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload")]
@@ -185,6 +192,7 @@ pub enum HubToBridgeMessage {
         download_url: Option<String>,
     },
     SubmitToHub(SubmitHubPayload),
+    CheckAuth(CheckAuthPayload),
     Ping,
 }
 

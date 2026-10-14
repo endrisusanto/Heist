@@ -324,50 +324,30 @@
                 <div class="auth-status-badges" id="authStatusBadges"></div>
               </div>
 
-              <!-- Form Input User & Pass -->
-              <form id="authCredentialsForm" class="settings-form" style="margin-top: 14px;">
+              <!-- Cookies Input & Actions -->
+              <div class="settings-form" style="margin-top: 14px;">
                 <div class="form-field-group">
-                  <label for="authUsername">Username SSO / Hub</label>
-                  <input type="text" id="authUsername" class="custom-input" placeholder="Masukkan username SSO" autocomplete="username" />
-                  <span class="field-hint">Disimpan di localStorage browser & disinkronkan ke auth.json server</span>
+                  <label for="authRawInput">Session Cookies (Mobile R&D Hub / SSO)</label>
+                  <textarea id="authRawInput" class="custom-textarea" rows="4" placeholder="Paste session cookies dari browser extension atau DevTools (contoh: EP_LOGINID=endri.s; JSESSIONID=... atau tab-separated cookies)..."></textarea>
+                  <span class="field-hint">Gunakan ekstensi Auto-Fill atau salin tabel cookies dari DevTools browser intranet Anda.</span>
                 </div>
 
-                <div class="form-field-group" style="margin-top: 10px;">
-                  <label for="authPassword">Password SSO</label>
-                  <div style="position: relative; display: flex; align-items: center;">
-                    <input type="password" id="authPassword" class="custom-input" style="padding-right: 36px;" placeholder="Masukkan password SSO" autocomplete="current-password" />
-                    <button type="button" id="togglePasswordBtn" style="position: absolute; right: 8px; background: none; border: none; cursor: pointer; color: var(--text-muted); font-size: 14px; padding: 2px;" title="Lihat / sembunyikan password">👁️</button>
-                  </div>
-                </div>
-
-                <div class="settings-actions-bar" style="margin-top: 16px;">
-                  <button type="submit" id="saveCredentialsBtn" class="btn btn-blue btn-sm">
+                <div class="settings-actions-bar" style="margin-top: 14px;">
+                  <button type="button" id="saveAuthTextBtn" class="btn btn-blue btn-sm">
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
-                    <span>Simpan Kredensial</span>
+                    <span>Simpan Cookies</span>
                   </button>
 
-                  <button type="button" id="testAuthBtn" class="btn btn-secondary-sm">
+                  <button type="button" id="testAuthBtn" class="btn btn-secondary-sm" title="Uji apakah session cookies aktif dan diterima oleh portal intranet">
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
-                    <span>Test Session</span>
+                    <span>Cek Koneksi Cookies</span>
                   </button>
 
                   <button type="button" id="clearAuthBtn" class="btn btn-danger-sm">
-                    <span>Hapus</span>
+                    <span>Hapus Session</span>
                   </button>
                 </div>
-              </form>
-
-              <!-- Opsi Lanjutan (Manual Cookie / File auth.json) -->
-              <details style="margin-top: 16px; font-size: 11px; color: var(--text-muted);">
-                <summary style="cursor: pointer; user-select: none;">Opsi Lanjutan (Manual Cookie / File auth.json)</summary>
-                <div style="margin-top: 8px; display: flex; flex-direction: column; gap: 8px;">
-                  <textarea id="authRawInput" class="custom-textarea" rows="2" placeholder="Paste manual HUBSESSID=xxxx atau Playwright JSON jika diperlukan..."></textarea>
-                  <div style="display: flex; gap: 8px;">
-                    <button type="button" id="saveAuthTextBtn" class="btn btn-secondary-sm">Simpan Cookie Manual</button>
-                    <button type="button" id="launchBrowserLoginBtn" class="btn btn-secondary-sm" title="Buka browser untuk login SSO interaktif">Login via Browser</button>
-                  </div>
-                </div>
-              </details>
+              </div>
 
               <div id="authFeedbackMsg" class="settings-feedback-msg" style="display:none;"></div>
             </div>

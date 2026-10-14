@@ -116,7 +116,7 @@ export function getAuthStatus(): AuthStatus {
       cookies: [],
       expiresAt: null,
       hasHubSessId: false,
-      message: 'Belum ada kredensial / auth.json. Silakan masukkan username & password di menu Setting.'
+      message: 'Belum ada session cookies. Silakan paste cookies di menu Setting.'
     };
   }
 
@@ -509,7 +509,7 @@ export async function verifyHubSession(): Promise<{ ok: boolean; status: number;
     return {
       ok: false,
       status: 401,
-      message: 'Kredensial belum ada. Silakan masukkan username & password di menu Setting.'
+      message: 'Session cookies belum tersimpan di auth.json. Silakan paste cookies di menu Setting.'
     };
   }
 
