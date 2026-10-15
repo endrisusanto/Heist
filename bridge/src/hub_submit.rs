@@ -41,22 +41,18 @@ pub fn execute_hub_submission(
         let (script_path, working_dir) = resolve_script(&app, "runner.mjs");
         if !script_path.exists() {
             let err_msg = format!("Playwright submission engine not found at {:?}", script_path);
-            let _ = tx.send(BridgeToHubMessage::ActionResponse {
-                action: "submit_hub".to_string(),
-                success: false,
-                message: err_msg,
-            });
+            let _ = tx.send(BridgeToHubMessage::action_response("submit_hub", false, err_msg));
             return;
         }
 
         let serialized = match serde_json::to_string(&payload) {
             Ok(s) => s,
             Err(e) => {
-                let _ = tx.send(BridgeToHubMessage::ActionResponse {
-                    action: "submit_hub".to_string(),
-                    success: false,
-                    message: format!("Payload serialization failed: {e}"),
-                });
+                let _ = tx.send(BridgeToHubMessage::action_response(
+                    "submit_hub",
+                    false,
+                    format!("Payload serialization failed: {e}"),
+                ));
                 return;
             }
         };
@@ -83,11 +79,7 @@ pub fn execute_hub_submission(
             Ok(c) => c,
             Err(e) => {
                 let err_msg = format!("Failed to launch Node.js Playwright engine: {e}. Ensure Node.js is installed.");
-                let _ = tx.send(BridgeToHubMessage::ActionResponse {
-                    action: "submit_hub".to_string(),
-                    success: false,
-                    message: err_msg,
-                });
+                let _ = tx.send(BridgeToHubMessage::action_response("submit_hub", false, err_msg));
                 return;
             }
         };
@@ -125,11 +117,7 @@ pub fn execute_hub_submission(
                         finished_reported = true;
                         let success = val.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
                         let msg = val.get("message").and_then(|v| v.as_str()).unwrap_or("");
-                        let _ = tx.send(BridgeToHubMessage::ActionResponse {
-                            action: "submit_hub".to_string(),
-                            success,
-                            message: msg.to_string(),
-                        });
+                        let _ = tx.send(BridgeToHubMessage::action_response("submit_hub", success, msg));
                     }
                     _ => {}
                 }
@@ -139,11 +127,11 @@ pub fn execute_hub_submission(
         let _ = child.wait().await;
 
         if !finished_reported {
-            let _ = tx.send(BridgeToHubMessage::ActionResponse {
-                action: "submit_hub".to_string(),
-                success: false,
-                message: "Playwright process closed without final report".to_string(),
-            });
+            let _ = tx.send(BridgeToHubMessage::action_response(
+                "submit_hub",
+                false,
+                "Playwright process closed without final report",
+            ));
         }
     });
 }
@@ -169,11 +157,11 @@ pub fn check_hub_auth(
         let serialized = match serde_json::to_string(&payload) {
             Ok(s) => s,
             Err(e) => {
-                let _ = tx.send(BridgeToHubMessage::ActionResponse {
-                    action: "check_auth".to_string(),
-                    success: false,
-                    message: format!("Payload serialization failed: {e}"),
-                });
+                let _ = tx.send(BridgeToHubMessage::action_response(
+                    "check_auth",
+                    false,
+                    format!("Payload serialization failed: {e}"),
+                ));
                 return;
             }
         };
@@ -200,11 +188,7 @@ pub fn check_hub_auth(
             Ok(c) => c,
             Err(e) => {
                 let err_msg = format!("Failed to launch Node.js for check_auth: {e}");
-                let _ = tx.send(BridgeToHubMessage::ActionResponse {
-                    action: "check_auth".to_string(),
-                    success: false,
-                    message: err_msg,
-                });
+                let _ = tx.send(BridgeToHubMessage::action_response("check_auth", false, err_msg));
                 return;
             }
         };
@@ -231,12 +215,14 @@ pub fn check_hub_auth(
             if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
                 let success = val.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
                 let msg = val.get("message").and_then(|v| v.as_str()).unwrap_or("");
+                let cookies = val.get("cookies").cloned();
                 response_sent = true;
-                let _ = tx.send(BridgeToHubMessage::ActionResponse {
-                    action: "check_auth".to_string(),
+                let _ = tx.send(BridgeToHubMessage::action_response_with_cookies(
+                    "check_auth",
                     success,
-                    message: msg.to_string(),
-                });
+                    msg,
+                    cookies,
+                ));
                 break;
             }
         }
@@ -244,11 +230,11 @@ pub fn check_hub_auth(
         let _ = child.wait().await;
 
         if !response_sent {
-            let _ = tx.send(BridgeToHubMessage::ActionResponse {
-                action: "check_auth".to_string(),
-                success: false,
-                message: "check_auth process terminated without response".to_string(),
-            });
+            let _ = tx.send(BridgeToHubMessage::action_response(
+                "check_auth",
+                false,
+                "check_auth process terminated without response",
+            ));
         }
     });
 }

@@ -128,31 +128,42 @@ async function main() {
     emitLog('info', `Page loaded. Active URL: ${page.url()}`);
 
     let currentUrl = page.url();
-    if (currentUrl.toLowerCase().includes('login') || currentUrl.toLowerCase().includes('sso')) {
+    if (currentUrl.toLowerCase().includes('login') || currentUrl.toLowerCase().includes('sso') || currentUrl.toLowerCase().includes('adfs')) {
       emitLog('warn', `Redirected to SSO login: ${currentUrl}`);
 
       if (username && password) {
         emitLog('info', `Attempting auto-fill login for user "${username}"...`);
-        const userInput = page.locator('input[name="user_id"], input[name="username"], input[name="login_id"], input[id*="user" i], input[type="text"]').first();
-        const passInput = page.locator('input[name="password"], input[name="passwd"], input[id*="pass" i], input[type="password"]').first();
+        const userInput = page.locator('#userNameInput, input[name="UserName"], input[name="user_id"], input[name="username"], input[name="login_id"], input[id*="user" i], input[type="text"]').first();
+        const passInput = page.locator('#passwordInput, input[name="Password"], input[name="password"], input[name="passwd"], input[id*="pass" i], input[type="password"]').first();
 
-        if (await userInput.isVisible({ timeout: 4000 }) && await passInput.isVisible({ timeout: 4000 })) {
+        if (await userInput.isVisible({ timeout: 5000 }) && await passInput.isVisible({ timeout: 5000 })) {
           await userInput.fill(username);
           await passInput.fill(password);
-          const submitBtn = page.locator('button:has-text("Login"), button:has-text("Sign in"), button:has-text("로그인"), input[type="submit"], button[type="submit"]').first();
-          if (await submitBtn.isVisible({ timeout: 2000 })) {
+          const submitBtn = page.locator('#submitButton, span#submitButton, button#submitButton, input[type="submit"], button[type="submit"], button:has-text("Sign in"), button:has-text("Login"), button:has-text("로그인")').first();
+          if (await submitBtn.isVisible({ timeout: 3000 })) {
             await submitBtn.click();
           } else {
             await passInput.press('Enter');
           }
+          emitLog('info', 'Credentials submitted, waiting for SSO redirection...');
+          try {
+            await page.waitForURL((url) => !url.href.includes('sts.secsso.net') && !url.href.includes('/adfs/'), { timeout: 20000 });
+          } catch {}
           await page.waitForTimeout(4000);
         }
       }
 
       currentUrl = page.url();
-      if (currentUrl.toLowerCase().includes('login') || currentUrl.toLowerCase().includes('sso')) {
+      if (currentUrl.toLowerCase().includes('login') || currentUrl.toLowerCase().includes('sso') || currentUrl.toLowerCase().includes('adfs')) {
         throw new Error('Session SSO expired or requires 2FA verification.');
       }
+
+      try {
+        const refreshedCookies = await context.cookies();
+        if (refreshedCookies && refreshedCookies.length > 0) {
+          emit('cookies_updated', { cookies: refreshedCookies });
+        }
+      } catch {}
     }
 
     // Set Category

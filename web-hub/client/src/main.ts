@@ -176,6 +176,11 @@ const els = {
   authCardTitle: document.getElementById('authCardTitle') as HTMLElement | null,
   authCardSub: document.getElementById('authCardSub') as HTMLElement | null,
   authStatusBadges: document.getElementById('authStatusBadges') as HTMLElement | null,
+  authCredentialsForm: document.getElementById('authCredentialsForm') as HTMLFormElement | null,
+  authUsername: document.getElementById('authUsername') as HTMLInputElement | null,
+  authPassword: document.getElementById('authPassword') as HTMLInputElement | null,
+  togglePasswordBtn: document.getElementById('togglePasswordBtn') as HTMLButtonElement | null,
+  saveCredentialsBtn: document.getElementById('saveCredentialsBtn') as HTMLButtonElement | null,
   authRawInput: document.getElementById('authRawInput') as HTMLTextAreaElement | null,
   saveAuthTextBtn: document.getElementById('saveAuthTextBtn') as HTMLButtonElement | null,
   testAuthBtn: document.getElementById('testAuthBtn') as HTMLButtonElement | null,
@@ -1913,12 +1918,23 @@ function renderAuthStatus(data: AuthStatusResponse): void {
     }
   }
 
+  if (els.authUsername && data.username && !els.authUsername.value) {
+    els.authUsername.value = data.username;
+  }
+  if (els.authPassword) {
+    if (data.hasCredentials) {
+      els.authPassword.placeholder = 'Kredensial tersimpan (••••••••)';
+    } else {
+      els.authPassword.placeholder = 'Password akun SSO';
+    }
+  }
+
   if (els.authStatusBadges) {
     els.authStatusBadges.innerHTML = '';
     if (data.username) {
       const userBadge = document.createElement('span');
       userBadge.className = 'auth-badge highlight';
-      userBadge.textContent = `User: ${data.username}`;
+      userBadge.textContent = `User: ${data.username}${data.hasCredentials ? ' (Pass Saved)' : ''}`;
       els.authStatusBadges.appendChild(userBadge);
     }
     for (const c of data.cookies) {
@@ -2028,6 +2044,33 @@ function setupSettingsModal(): void {
     });
   });
 
+  // Toggle password visibility
+  if (els.togglePasswordBtn && els.authPassword) {
+    els.togglePasswordBtn.addEventListener('click', () => {
+      const isPass = els.authPassword?.type === 'password';
+      if (els.authPassword) els.authPassword.type = isPass ? 'text' : 'password';
+      if (els.togglePasswordBtn) {
+        els.togglePasswordBtn.innerHTML = isPass
+          ? '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>'
+          : '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
+      }
+    });
+  }
+
+  // Save credentials form submit
+  if (els.authCredentialsForm) {
+    els.authCredentialsForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const username = els.authUsername?.value.trim() || '';
+      const password = els.authPassword?.value || '';
+      if (!username) {
+        showAuthFeedback('Username/ID intranet tidak boleh kosong.', 'error');
+        return;
+      }
+      sendAuthPayload({ username, password });
+    });
+  }
+
   // Save raw cookies text button
   if (els.saveAuthTextBtn && els.authRawInput) {
     els.saveAuthTextBtn.addEventListener('click', () => {
@@ -2047,7 +2090,7 @@ function setupSettingsModal(): void {
         els.testAuthBtn.disabled = true;
         els.testAuthBtn.textContent = 'Menguji koneksi...';
       }
-      showAuthFeedback('Menguji koneksi cookies ke Mobile R&D Hub via intranet...', 'info');
+      showAuthFeedback('Menguji koneksi ke Mobile R&D Hub via node intranet...', 'info');
 
       try {
         const res = await fetch('/api/settings/auth/test', { method: 'POST' });
@@ -2063,7 +2106,7 @@ function setupSettingsModal(): void {
       } finally {
         if (els.testAuthBtn) {
           els.testAuthBtn.disabled = false;
-          els.testAuthBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg><span>Cek Koneksi Cookies</span>';
+          els.testAuthBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg><span>Cek Koneksi</span>';
         }
       }
     });
@@ -2072,11 +2115,16 @@ function setupSettingsModal(): void {
   // Clear auth button
   if (els.clearAuthBtn) {
     els.clearAuthBtn.addEventListener('click', async () => {
-      if (!confirm('Hapus cookies session tersimpan di auth.json?')) return;
+      if (!confirm('Hapus kredensial dan session cookies tersimpan di auth.json?')) return;
       try {
+        if (els.authUsername) els.authUsername.value = '';
+        if (els.authPassword) {
+          els.authPassword.value = '';
+          els.authPassword.placeholder = 'Password akun SSO';
+        }
         if (els.authRawInput) els.authRawInput.value = '';
         await fetch('/api/settings/auth', { method: 'DELETE' });
-        showAuthFeedback('Cookies session telah dihapus dari auth.json.', 'info');
+        showAuthFeedback('Kredensial dan session cookies telah dihapus dari auth.json.', 'info');
         loadAuthStatus();
       } catch (err: any) {
         showAuthFeedback(`Gagal menghapus: ${err.message}`, 'error');

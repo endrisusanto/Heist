@@ -1478,16 +1478,27 @@ const server = http.createServer(async (req, res) => {
         type: 'CheckAuth',
         payload: {
           hub_base_url: hubConfig.hubBaseUrl,
-          cookies: authData.cookies || []
+          cookies: authData.cookies || [],
+          username: authData.username || '',
+          password: authData.password || '',
+          headless: hubConfig.headless !== false
         }
       };
 
       bridgeWs.send(JSON.stringify(checkMsg));
 
-      const timeoutMs = 15000;
+      const timeoutMs = 25000;
       const result = await new Promise<{ ok: boolean; message: string }>((resolve) => {
         const handler = (data: any) => {
           clearTimeout(timer);
+          if (Array.isArray(data.cookies) && data.cookies.length > 0) {
+            try {
+              saveAuthJson({
+                ...authData,
+                cookies: data.cookies
+              });
+            } catch {}
+          }
           resolve({ ok: Boolean(data.success), message: `[Node: ${targetNodeId}] ${data.message}` });
         };
 

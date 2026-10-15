@@ -125,7 +125,34 @@ pub enum BridgeToHubMessage {
         action: String,
         success: bool,
         message: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cookies: Option<serde_json::Value>,
     },
+}
+
+impl BridgeToHubMessage {
+    pub fn action_response(action: impl Into<String>, success: bool, message: impl Into<String>) -> Self {
+        Self::ActionResponse {
+            action: action.into(),
+            success,
+            message: message.into(),
+            cookies: None,
+        }
+    }
+
+    pub fn action_response_with_cookies(
+        action: impl Into<String>,
+        success: bool,
+        message: impl Into<String>,
+        cookies: Option<serde_json::Value>,
+    ) -> Self {
+        Self::ActionResponse {
+            action: action.into(),
+            success,
+            message: message.into(),
+            cookies,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -162,6 +189,12 @@ pub struct CheckAuthPayload {
     pub hub_base_url: String,
     #[serde(default)]
     pub cookies: serde_json::Value,
+    #[serde(default)]
+    pub username: Option<String>,
+    #[serde(default)]
+    pub password: Option<String>,
+    #[serde(default = "default_headless_true")]
+    pub headless: bool,
 }
 
 /// Messages received by Bridge from Hub Server

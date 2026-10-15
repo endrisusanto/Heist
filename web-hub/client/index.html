@@ -324,32 +324,56 @@
                 <div class="auth-status-badges" id="authStatusBadges"></div>
               </div>
 
-              <!-- Cookies Input & Actions -->
-              <div class="settings-form" style="margin-top: 14px;">
-                <div class="form-field-group">
-                  <label for="authRawInput">Session Cookies (Mobile R&D Hub / SSO)</label>
-                  <textarea id="authRawInput" class="custom-textarea" rows="4" placeholder="Paste session cookies dari browser extension atau DevTools (contoh: EP_LOGINID=endri.s; JSESSIONID=... atau tab-separated cookies)..."></textarea>
-                  <span class="field-hint">Gunakan ekstensi Auto-Fill atau salin tabel cookies dari DevTools browser intranet Anda.</span>
+              <!-- Section 1: Username & Password SSO -->
+              <form id="authCredentialsForm" class="settings-form" style="margin-top: 14px;">
+                <div class="form-row" style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                  <div class="form-field-group">
+                    <label for="authUsername">Username / ID Intranet</label>
+                    <input type="text" id="authUsername" class="custom-input" placeholder="contoh: endri.s" autocomplete="username" />
+                  </div>
+                  <div class="form-field-group">
+                    <label for="authPassword">Password SSO</label>
+                    <div class="password-input-wrapper" style="position: relative; display: flex; align-items: center;">
+                      <input type="password" id="authPassword" class="custom-input" placeholder="Password akun SSO" autocomplete="current-password" style="padding-right: 32px; width: 100%;" />
+                      <button type="button" id="togglePasswordBtn" class="password-toggle-btn" title="Lihat/Sembunyikan password" style="position: absolute; right: 8px; background: none; border: none; color: var(--text-muted); cursor: pointer; padding: 2px;">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                      </button>
+                    </div>
+                  </div>
                 </div>
 
-                <div class="settings-actions-bar" style="margin-top: 14px;">
-                  <button type="button" id="saveAuthTextBtn" class="btn btn-blue btn-sm">
+                <div class="settings-actions-bar" style="margin-top: 8px;">
+                  <button type="submit" id="saveCredentialsBtn" class="btn btn-blue btn-sm">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+                    <span>Simpan Kredensial</span>
+                  </button>
+                  <button type="button" id="testAuthBtn" class="btn btn-secondary-sm" title="Uji koneksi ke portal intranet Mobile R&D Hub">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+                    <span>Cek Koneksi</span>
+                  </button>
+                  <button type="button" id="clearAuthBtn" class="btn btn-danger-sm" title="Hapus kredensial dan session cookies">
+                    <span>Hapus Data</span>
+                  </button>
+                </div>
+              </form>
+
+              <!-- Section 2: Session Cookies Manual -->
+              <div class="settings-form" style="margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border-color, rgba(255,255,255,0.08));">
+                <div class="form-field-group">
+                  <label for="authRawInput">Session Cookies (Opsi / DevTools / Extension)</label>
+                  <textarea id="authRawInput" class="custom-textarea" rows="3" placeholder="Paste session cookies jika ingin menyuntikkan cookies manual (contoh: EP_LOGINID=endri.s; JSESSIONID=...)..."></textarea>
+                  <span class="field-hint">Opsional: Jika tidak ingin menyimpan password, Anda dapat menyalin cookies session dari DevTools browser intranet.</span>
+                </div>
+
+                <div class="settings-actions-bar" style="margin-top: 8px;">
+                  <button type="button" id="saveAuthTextBtn" class="btn btn-secondary-sm">
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
                     <span>Simpan Cookies</span>
-                  </button>
-
-                  <button type="button" id="testAuthBtn" class="btn btn-secondary-sm" title="Uji apakah session cookies aktif dan diterima oleh portal intranet">
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
-                    <span>Cek Koneksi Cookies</span>
-                  </button>
-
-                  <button type="button" id="clearAuthBtn" class="btn btn-danger-sm">
-                    <span>Hapus Session</span>
                   </button>
                 </div>
               </div>
 
-              <div id="authFeedbackMsg" class="settings-feedback-msg" style="display:none;"></div>
+              <div id="authFeedbackMsg" class="settings-feedback-msg" style="display:none; margin-top: 12px;"></div>
             </div>
 
             <!-- TAB 2: Hub Configuration -->

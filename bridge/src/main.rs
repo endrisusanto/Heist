@@ -537,21 +537,17 @@ fn handle_hub_command(
 
             if let Err(e) = res {
                 emit_log(app, "error", &format!("Failed to trigger run: {e}"));
-                let _ = tx.send(BridgeToHubMessage::ActionResponse {
-                    action: "trigger_run".to_string(),
-                    success: false,
-                    message: e,
-                });
+                let _ = tx.send(BridgeToHubMessage::action_response("trigger_run", false, e));
             }
         }
         HubToBridgeMessage::CancelRun { run_id } => {
             emit_log(app, "warn", &format!("Cancel run requested for {run_id}"));
             let res = state.runner.cancel_run(&run_id);
-            let _ = tx.send(BridgeToHubMessage::ActionResponse {
-                action: "cancel_run".to_string(),
-                success: res.is_ok(),
-                message: format!("Cancel result: {:?}", res),
-            });
+            let _ = tx.send(BridgeToHubMessage::action_response(
+                "cancel_run",
+                res.is_ok(),
+                format!("Cancel result: {:?}", res),
+            ));
         }
         HubToBridgeMessage::RequestPreflight { atm_root: root_override } => {
             emit_log(app, "info", "Preflight check requested");
@@ -563,11 +559,11 @@ fn handle_hub_command(
             emit_log(app, "info", "ATM tools update requested");
             let root = root_override.unwrap_or(atm_root);
             let res = runner::run_atm_agent_update(&root);
-            let _ = tx.send(BridgeToHubMessage::ActionResponse {
-                action: "update_tools".to_string(),
-                success: res.is_ok(),
-                message: res.unwrap_or_else(|e| e),
-            });
+            let _ = tx.send(BridgeToHubMessage::action_response(
+                "update_tools",
+                res.is_ok(),
+                res.unwrap_or_else(|e| e),
+            ));
         }
         HubToBridgeMessage::SetLamp { serial, state } => {
             emit_log(app, "info", &format!("Toggle lamp for {serial} (state: {state})"));
@@ -580,11 +576,11 @@ fn handle_hub_command(
         HubToBridgeMessage::ClearResults { serial } => {
             emit_log(app, "info", &format!("Clear result files on {serial}"));
             let res = scanner::clear_device_results(&serial, std::path::Path::new(&atm_root));
-            let _ = tx.send(BridgeToHubMessage::ActionResponse {
-                action: "clear_results".to_string(),
-                success: res.is_ok(),
-                message: res.unwrap_or_else(|e| e),
-            });
+            let _ = tx.send(BridgeToHubMessage::action_response(
+                "clear_results",
+                res.is_ok(),
+                res.unwrap_or_else(|e| e),
+            ));
         }
         HubToBridgeMessage::UpdateBridge { download_url } => {
             emit_log(app, "info", "Bridge self-update initiated");
@@ -596,14 +592,14 @@ fn handle_hub_command(
                     Ok(msg) => emit_log(&app_clone, "success", &format!("Bridge update succeeded: {msg}")),
                     Err(e) => emit_log(&app_clone, "error", &format!("Bridge update failed: {e}")),
                 }
-                let _ = tx_clone.send(BridgeToHubMessage::ActionResponse {
-                    action: "update_bridge".to_string(),
-                    success: res.is_ok(),
-                    message: match res {
+                let _ = tx_clone.send(BridgeToHubMessage::action_response(
+                    "update_bridge",
+                    res.is_ok(),
+                    match res {
                         Ok(msg) => msg,
                         Err(e) => format!("Update failed: {e}"),
                     },
-                });
+                ));
             });
         }
         HubToBridgeMessage::SubmitToHub(payload) => {
