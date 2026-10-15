@@ -96,19 +96,17 @@ async function main() {
     process.exit(1);
   }
 
-  const {
-    title = 'ATM Test Result',
-    category = 'Result',
-    hubBaseUrl = 'https://mobilerndhub.sec.samsung.net/hub/site/gcim/board/submission/write',
-    boardSrl = '',
-    archivePath = '',
-    archiveBase64 = '',
-    archiveFilename = 'ATM_results.zip',
-    cookies = [],
-    username = '',
-    password = '',
-    headless = true
-  } = payload;
+  const title = payload.title || 'ATM Test Result';
+  const category = payload.category || 'Result';
+  const hubBaseUrl = payload.hub_base_url || payload.hubBaseUrl || 'https://mobilerndhub.sec.samsung.net/hub/site/gcim/board/submission/write';
+  const boardSrl = payload.board_srl || payload.boardSrl || '';
+  const archivePath = payload.archive_path || payload.archivePath || '';
+  const archiveBase64 = payload.archive_base64 || payload.archiveBase64 || '';
+  const archiveFilename = payload.archive_filename || payload.archiveFilename || 'ATM_results.zip';
+  const cookies = payload.cookies || [];
+  const username = payload.username || '';
+  const password = payload.password || '';
+  const headless = payload.headless !== false;
 
   emitLog('info', `Starting submission for "${title}"`);
   emitLog('info', `Target URL: ${hubBaseUrl} (headless: ${headless})`);
@@ -120,8 +118,14 @@ async function main() {
     if (archiveBase64 && !archivePath) {
       tempFilePath = path.join(os.tmpdir(), `heist_upload_${Date.now()}_${archiveFilename}`);
       fs.writeFileSync(tempFilePath, Buffer.from(archiveBase64, 'base64'));
+      const fileSize = fs.statSync(tempFilePath).size;
+      emitLog('info', `Created temporary archive from base64: ${tempFilePath} (${fileSize} bytes)`);
     } else if (archivePath && fs.existsSync(archivePath)) {
       tempFilePath = archivePath;
+      const fileSize = fs.statSync(tempFilePath).size;
+      emitLog('info', `Using archive from path: ${tempFilePath} (${fileSize} bytes)`);
+    } else {
+      emitLog('warn', `No archive data supplied in payload (archiveBase64 len: ${archiveBase64.length}, archivePath: "${archivePath}")`);
     }
 
     const chromium = await getChromium();
@@ -302,33 +306,51 @@ async function main() {
     // Upload archive file
     if (tempFilePath && fs.existsSync(tempFilePath)) {
       const baseName = path.basename(tempFilePath);
-      emitLog('info', `Attaching file: ${baseName}...`);
+      const fileSize = fs.statSync(tempFilePath).size;
+      emitLog('info', `Attaching file: ${baseName} (${Math.round(fileSize / 1024)} KB)...`);
       let fileAttached = false;
 
-      // Attempt 1: Choose File button setInputFiles
+      // Attempt 1: Choose File button (click then setInputFiles matching codegen)
       try {
         const chooseFileBtn = page.getByRole('button', { name: 'Choose File' })
           .or(page.locator('button:has-text("Choose File"), .x-btn:has-text("Choose File")'))
           .first();
-        if (await chooseFileBtn.isVisible({ timeout: 3000 })) {
+        if (await chooseFileBtn.isVisible({ timeout: 4000 })) {
+          await chooseFileBtn.click();
           await chooseFileBtn.setInputFiles(tempFilePath);
           fileAttached = true;
           emitLog('info', 'File attached via "Choose File" button setInputFiles.');
 
           // Wait for file list confirmation signal (from trace: role=option with filename)
           try {
-            const uploadedItem = page.locator(`[role="option"]:has-text("${baseName}"), .x-boundlist-item:has-text("${baseName}")`).first();
-            await uploadedItem.waitFor({ state: 'visible', timeout: 6000 });
+            const uploadedItem = page.locator(`[role="option"]:has-text("${baseName}"), .x-boundlist-item:has-text("${baseName}"), td:has-text("${baseName}")`).first();
+            await uploadedItem.waitFor({ state: 'visible', timeout: 8000 });
             emitLog('info', `File attachment confirmed in portal list: ${baseName}`);
           } catch {
-            await page.waitForTimeout(2000);
+            emitLog('info', 'File attachment visual wait completed.');
+            await page.waitForTimeout(3000);
           }
         }
       } catch (cfErr) {
         emitLog('info', `Choose File setInputFiles notice: ${cfErr.message}`);
       }
 
-      // Attempt 2: Generic input[type="file"]
+      // Attempt 2: Direct setInputFiles without click
+      if (!fileAttached) {
+        try {
+          const directBtn = page.getByRole('button', { name: 'Choose File' }).first();
+          if (await directBtn.count() > 0) {
+            await directBtn.setInputFiles(tempFilePath);
+            fileAttached = true;
+            emitLog('info', 'File attached via direct Choose File setInputFiles.');
+            await page.waitForTimeout(3000);
+          }
+        } catch (dErr) {
+          emitLog('info', `Direct Choose File notice: ${dErr.message}`);
+        }
+      }
+
+      // Attempt 3: Generic input[type="file"]
       if (!fileAttached) {
         try {
           const fileInput = page.locator('input[type="file"]').first();
@@ -336,7 +358,7 @@ async function main() {
             await fileInput.setInputFiles(tempFilePath);
             fileAttached = true;
             emitLog('info', 'File attached via direct input[type="file"].');
-            await page.waitForTimeout(2000);
+            await page.waitForTimeout(3000);
           }
         } catch (fiErr) {
           emitLog('warn', `Generic file input attachment error: ${fiErr.message}`);
@@ -346,6 +368,8 @@ async function main() {
       if (!fileAttached) {
         emitLog('warn', 'Could not locate file uploader control on page.');
       }
+    } else {
+      emitLog('warn', `Archive file not available on disk! tempFilePath: ${tempFilePath}`);
     }
 
     // Submit form: Handled resiliently against dynamic auto-generated IDs (e.g. hubbutton-1023, hubbutton-1045)
@@ -353,64 +377,50 @@ async function main() {
 
     let submitFound = false;
 
-    // 1. Semantic Playwright role locator (Independent of HTML tags and dynamic IDs)
-    try {
-      const roleSubmit = page.getByRole('button', { name: /Submit|등록|Save|저장|OK/i }).first();
-      if (await roleSubmit.isVisible({ timeout: 2000 })) {
-        emitLog('info', 'Located submit button via accessible role & label.');
-        await roleSubmit.click();
-        submitFound = true;
-      }
-    } catch {}
+    // Prioritized submit button selectors based on actual user Playwright codegen
+    const candidateSelectors = [
+      '#hubbutton-1023',
+      'button[id^="hubbutton"]:has-text("Submit")',
+      'button[id^="hubbutton"]:has-text("등록")',
+      'a[id^="hubbutton"]:has-text("Submit")',
+      'a[id^="hubbutton"]:has-text("등록")',
+      '.x-toolbar .x-btn:has-text("Submit")',
+      '.x-toolbar .x-btn:has-text("등록")',
+      '.x-toolbar .x-btn:has-text("Save")',
+      '.x-btn:has-text("Submit")',
+      '.x-btn:has-text("등록")',
+      '.x-btn:has-text("Save")',
+      'button:has-text("Submit")',
+      'button:has-text("등록")',
+      'button:has-text("Save")',
+      'button[id^="hubbutton-"]',
+      'a[id^="hubbutton-"]',
+      'input[type="submit"]',
+      'button[type="submit"]'
+    ];
 
-    // 2. ExtJS button selectors combining pattern matching and button text
-    if (!submitFound) {
-      const semanticSelectors = [
-        '[id^="hubbutton"]:has-text("Submit")',
-        '[id^="hubbutton"]:has-text("등록")',
-        '[id^="hubbutton"]:has-text("Save")',
-        '.x-btn:has-text("Submit")',
-        '.x-btn:has-text("등록")',
-        '.x-btn:has-text("Save")',
-        '.x-btn:has-text("저장")',
-        'button:has-text("Submit")',
-        'button:has-text("등록")',
-        'button:has-text("Save")',
-        'a:has-text("Submit")',
-        'a:has-text("등록")',
-        'input[type="submit"]',
-        'button[type="submit"]',
-        '#hubbutton-1023'
-      ];
-
-      for (const sel of semanticSelectors) {
-        try {
-          const btn = page.locator(sel).first();
-          if (await btn.isVisible({ timeout: 1000 })) {
-            emitLog('info', `Located submit button via selector: "${sel}"`);
-            await btn.click();
-            submitFound = true;
-            break;
-          }
-        } catch {}
-      }
+    for (const sel of candidateSelectors) {
+      try {
+        const btn = page.locator(sel).first();
+        if (await btn.isVisible({ timeout: 1500 })) {
+          emitLog('info', `Located submit button via selector: "${sel}"`);
+          await btn.click();
+          submitFound = true;
+          break;
+        }
+      } catch {}
     }
 
+    // Accessible role locator fallback
     if (!submitFound) {
-      emitLog('warn', 'Submit button not located directly. Attempting DOM form.submit() fallback...');
-      const formSubmitted = await page.evaluate(() => {
-        const form = document.querySelector('form#fo_write, form.board_write, form[action*="mid=board"], form[name="write_form"], form');
-        if (form && typeof form.submit === 'function') {
-          form.submit();
-          return true;
+      try {
+        const roleSubmit = page.getByRole('button', { name: /Submit|등록|Save|저장|OK/i }).first();
+        if (await roleSubmit.isVisible({ timeout: 2000 })) {
+          emitLog('info', 'Located submit button via accessible role.');
+          await roleSubmit.click();
+          submitFound = true;
         }
-        return false;
-      }).catch(() => false);
-
-      if (formSubmitted) {
-        emitLog('info', 'Triggered form.submit() via DOM.');
-        submitFound = true;
-      }
+      } catch {}
     }
 
     if (!submitFound) {
@@ -423,7 +433,15 @@ async function main() {
     }
 
     emitLog('info', 'Menunggu respon submission dari portal...');
-    await page.waitForTimeout(4000);
+    try {
+      await Promise.race([
+        page.waitForURL((url) => !url.href.includes('/write'), { timeout: 12000 }),
+        page.locator('.x-grid-row, .board_list, internal:role=row[name*="MAIN HOME" i]').first().waitFor({ state: 'visible', timeout: 12000 })
+      ]);
+      emitLog('info', 'Portal transitioned successfully after submit.');
+    } catch {
+      await page.waitForTimeout(4000);
+    }
 
     const afterUrl = page.url();
     emitLog('info', `Submission selesai. Halaman aktif: ${afterUrl}`);
