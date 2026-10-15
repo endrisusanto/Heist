@@ -28,8 +28,41 @@ function getChromiumLaunchOptions(headless = true) {
   return options;
 }
 
+async function getChromium() {
+  try {
+    const pw = await import('playwright');
+    if (pw.chromium) return pw.chromium;
+  } catch {}
+
+  const userProfile = process.env.USERPROFILE || process.env.HOME || '';
+  const appData = process.env.APPDATA || (userProfile ? `${userProfile}\\AppData\\Roaming` : '');
+  const localAppData = process.env.LOCALAPPDATA || (userProfile ? `${userProfile}\\AppData\\Local` : '');
+
+  const candidates = [
+    appData ? `${appData}\\npm\\node_modules\\playwright\\index.mjs` : '',
+    appData ? `${appData}\\npm\\node_modules\\playwright\\index.js` : '',
+    localAppData ? `${localAppData}\\npm\\node_modules\\playwright\\index.mjs` : '',
+    localAppData ? `${localAppData}\\npm\\node_modules\\playwright\\index.js` : '',
+    'C:\\Program Files\\nodejs\\node_modules\\playwright\\index.js',
+    'C:\\Program Files\\Heist Bridge\\resources\\engine\\node_modules\\playwright\\index.mjs',
+    'C:\\Program Files\\Heist Bridge\\resources\\engine\\node_modules\\playwright\\index.js'
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      try {
+        const mod = await import(`file://${candidate.replace(/\\/g, '/')}`);
+        const chrom = mod.chromium || mod.default?.chromium;
+        if (chrom) return chrom;
+      } catch {}
+    }
+  }
+
+  throw new Error('Package "playwright" belum terinstall di PC Windows. Jalankan "npm install -g playwright" di terminal PC Windows, atau salin session cookies aktif dari browser.');
+}
+
 async function attemptPlaywrightLogin(loginUrl, username, password, headless = true) {
-  const { chromium } = await import('playwright');
+  const chromium = await getChromium();
   const launchOpts = getChromiumLaunchOptions(headless);
   const browser = await chromium.launch(launchOpts);
   try {

@@ -139,20 +139,15 @@ pub fn execute_hub_submission(
 const EMBEDDED_CHECK_AUTH_SCRIPT: &str = include_str!("../resources/engine/check_auth.mjs");
 
 pub fn check_hub_auth(
-    app: AppHandle,
+    _app: AppHandle,
     payload: CheckAuthPayload,
     tx: mpsc::UnboundedSender<BridgeToHubMessage>,
 ) {
     tokio::spawn(async move {
-        let (resolved_path, mut working_dir) = resolve_script(&app, "check_auth.mjs");
-        let script_path = if resolved_path.exists() {
-            resolved_path
-        } else {
-            let tmp_path = std::env::temp_dir().join("heist_check_auth.mjs");
-            let _ = std::fs::write(&tmp_path, EMBEDDED_CHECK_AUTH_SCRIPT);
-            working_dir = None;
-            tmp_path
-        };
+        let tmp_path = std::env::temp_dir().join("heist_check_auth.mjs");
+        let _ = std::fs::write(&tmp_path, EMBEDDED_CHECK_AUTH_SCRIPT);
+        let script_path = tmp_path;
+        let working_dir: Option<PathBuf> = None;
 
         let serialized = match serde_json::to_string(&payload) {
             Ok(s) => s,

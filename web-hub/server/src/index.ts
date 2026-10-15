@@ -1440,92 +1440,89 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  if (req.url === '/api/settings/auth/test' && req.method === 'POST') {
-    let reqBody: any = {};
-    try {
-      const raw = await readJsonBody(req);
-      if (raw && raw.trim().length > 0) reqBody = JSON.parse(raw);
-    } catch {}
-
-    let targetNodeId = reqBody.nodeId || '';
-    if (!targetNodeId || !bridgeConnections.has(targetNodeId)) {
-      const activeIds = Array.from(bridgeConnections.keys()).filter(id => {
-        const ws = bridgeConnections.get(id);
-        return ws && ws.readyState === WebSocket.OPEN;
-      });
-      activeIds.sort((a, b) => {
-        const vA = fleetState.nodes[a]?.version || '';
-        const vB = fleetState.nodes[b]?.version || '';
-        return vB.localeCompare(vA, undefined, { numeric: true });
-      });
-      targetNodeId = activeIds[0] || '';
+  function getMobileRndBridgeNode(): { nodeId: string; ws: WebSocket } | null {
+    const preferredId = 'endri-s02';
+    const preferredWs = bridgeConnections.get(preferredId);
+    if (preferredWs && preferredWs.readyState === WebSocket.OPEN) {
+      return { nodeId: preferredId, ws: preferredWs };
     }
-
-    const bridgeWs = targetNodeId ? bridgeConnections.get(targetNodeId) : null;
-
-    if (bridgeWs && bridgeWs.readyState === WebSocket.OPEN) {
-      console.log(`[AuthTest] Delegating cookie verification to Bridge node "${targetNodeId}"...`);
-      const authPath = getAuthFilePath();
-      let authData: any = {};
-      try {
-        if (fs.existsSync(authPath)) {
-          authData = JSON.parse(fs.readFileSync(authPath, 'utf-8'));
+    for (const [nodeId, socket] of bridgeConnections.entries()) {
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        const nodeMeta = fleetState.nodes[nodeId];
+        if (nodeMeta && nodeMeta.os === 'windows') {
+          return { nodeId, ws: socket };
         }
-      } catch {}
+      }
+    }
+    return null;
+  }
 
-      const hubConfig = getHubConfig();
-      const checkMsg = {
-        type: 'CheckAuth',
-        payload: {
-          hub_base_url: hubConfig.hubBaseUrl,
-          cookies: authData.cookies || [],
-          username: authData.username || '',
-          password: authData.password || '',
-          headless: hubConfig.headless !== false
-        }
-      };
+  if (req.url === '/api/settings/auth/test' && req.method === 'POST') {
+    const bridgeTarget = getMobileRndBridgeNode();
 
-      bridgeWs.send(JSON.stringify(checkMsg));
-
-      const timeoutMs = 25000;
-      const result = await new Promise<{ ok: boolean; message: string }>((resolve) => {
-        const handler = (data: any) => {
-          clearTimeout(timer);
-          if (Array.isArray(data.cookies) && data.cookies.length > 0) {
-            try {
-              saveAuthJson({
-                ...authData,
-                cookies: data.cookies
-              });
-            } catch {}
-          }
-          resolve({ ok: Boolean(data.success), message: `[Node: ${targetNodeId}] ${data.message}` });
-        };
-
-        const eventName = `action:${targetNodeId}:check_auth`;
-        bridgeActionEmitter.once(eventName, handler);
-
-        const timer = setTimeout(() => {
-          bridgeActionEmitter.removeListener(eventName, handler);
-          resolve({
-            ok: false,
-            message: `Timeout verifikasi koneksi dari node "${targetNodeId}" (${timeoutMs / 1000}s).`
-          });
-        }, timeoutMs);
-      });
-
-      res.writeHead(result.ok ? 200 : 400, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(result));
+    if (!bridgeTarget) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        ok: false,
+        message: 'PC Windows "endri-s02" tidak terhubung ke Hub. Akses Mobile R&D Hub hanya dapat dilakukan melalui PC Windows.'
+      }));
       return;
     }
 
-    verifyHubSession().then((result) => {
-      res.writeHead(result.ok ? 200 : 400, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(result));
-    }).catch((err) => {
-      res.writeHead(500, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ ok: false, status: 500, message: err.message }));
+    const { nodeId: targetNodeId, ws: bridgeWs } = bridgeTarget;
+    console.log(`[AuthTest] Delegating cookie verification to PC Windows Bridge "${targetNodeId}"...`);
+
+    const authPath = getAuthFilePath();
+    let authData: any = {};
+    try {
+      if (fs.existsSync(authPath)) {
+        authData = JSON.parse(fs.readFileSync(authPath, 'utf-8'));
+      }
+    } catch {}
+
+    const hubConfig = getHubConfig();
+    const checkMsg = {
+      type: 'CheckAuth',
+      payload: {
+        hub_base_url: hubConfig.hubBaseUrl,
+        cookies: authData.cookies || [],
+        username: authData.username || '',
+        password: authData.password || '',
+        headless: hubConfig.headless !== false
+      }
+    };
+
+    bridgeWs.send(JSON.stringify(checkMsg));
+
+    const timeoutMs = 25000;
+    const result = await new Promise<{ ok: boolean; message: string }>((resolve) => {
+      const handler = (data: any) => {
+        clearTimeout(timer);
+        if (Array.isArray(data.cookies) && data.cookies.length > 0) {
+          try {
+            saveAuthJson({
+              ...authData,
+              cookies: data.cookies
+            });
+          } catch {}
+        }
+        resolve({ ok: Boolean(data.success), message: `[Node: ${targetNodeId}] ${data.message}` });
+      };
+
+      const eventName = `action:${targetNodeId}:check_auth`;
+      bridgeActionEmitter.once(eventName, handler);
+
+      const timer = setTimeout(() => {
+        bridgeActionEmitter.removeListener(eventName, handler);
+        resolve({
+          ok: false,
+          message: `Timeout verifikasi koneksi dari node "${targetNodeId}" (${timeoutMs / 1000}s).`
+        });
+      }, timeoutMs);
     });
+
+    res.writeHead(result.ok ? 200 : 400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(result));
     return;
   }
 
@@ -1659,17 +1656,20 @@ const server = http.createServer(async (req, res) => {
 
       const archiveBuffer = getMasterArchiveZipBuffer(pda, model, activeTools);
 
-      // Delegate to intranet-connected Bridge if online
-      let targetNodeId = requestedNodeId && bridgeConnections.has(requestedNodeId) ? requestedNodeId : '';
-      if (!targetNodeId && bridgeConnections.size > 0) {
-        targetNodeId = Array.from(bridgeConnections.keys())[0];
+      // Mobile R&D Hub submission hanya melalui PC Windows endri-s02
+      const bridgeTarget = getMobileRndBridgeNode();
+
+      if (!bridgeTarget) {
+        const errMsg = 'PC Windows "endri-s02" tidak terhubung ke Hub. Submission ke Mobile R&D Hub hanya dapat dilakukan melalui PC Windows.';
+        pushLog(`[SubmitHub] Gagal: ${errMsg}`);
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, message: errMsg }));
+        return;
       }
 
-      const bridgeWs = targetNodeId ? bridgeConnections.get(targetNodeId) : null;
-
-      if (bridgeWs && bridgeWs.readyState === WebSocket.OPEN) {
-        console.log(`[SubmitHub] Delegating Playwright submission to Bridge "${targetNodeId}"...`);
-        pushLog(`[${targetNodeId}][hub_submit] Memulai otomasi submission via Bridge "${targetNodeId}"...`);
+      const { nodeId: targetNodeId, ws: bridgeWs } = bridgeTarget;
+      console.log(`[SubmitHub] Delegating Playwright submission to PC Windows Bridge "${targetNodeId}"...`);
+      pushLog(`[${targetNodeId}][hub_submit] Memulai otomasi submission via PC Windows "${targetNodeId}"...`);
 
         const authPath = getAuthFilePath();
         let authData: any = {};
@@ -1717,25 +1717,9 @@ const server = http.createServer(async (req, res) => {
           }, timeoutMs);
         });
 
-        res.writeHead(result.ok ? 200 : 400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(result));
-        return;
-      }
-
-      // Local fallback on Web-Hub server if no Bridge is connected
-      console.log('[SubmitHub] No active Bridge connected. Running Playwright locally on Web-Hub...');
-      submitToMobileRndHub({
-        title,
-        category,
-        archiveBuffer,
-        archiveFilename: archiveName
-      }).then((result) => {
-        res.writeHead(result.ok ? 200 : 400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(result));
-      }).catch((err) => {
-        res.writeHead(500, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: false, message: err.message }));
-      });
+      res.writeHead(result.ok ? 200 : 400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(result));
+      return;
     }).catch((err) => {
       res.writeHead(400, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ ok: false, message: err.message }));
