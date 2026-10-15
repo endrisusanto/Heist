@@ -268,7 +268,7 @@ async function main() {
 
     // Fill Editor Body (NamoSE HTML Editor frame)
     emitLog('info', 'Filling Editor Body (NamoSE HTML Editor)...');
-    const bodyContent = content || title || 'Automated Test Result';
+    const bodyContent = payload.content || title || 'Automated Test Result';
     let editorFilled = false;
 
     // Attempt 1: frameLocator using exact ID from trace
@@ -310,6 +310,12 @@ async function main() {
       emitLog('info', `Attaching file: ${baseName} (${Math.round(fileSize / 1024)} KB)...`);
       let fileAttached = false;
 
+      // Listen for Samsung Mobile R&D Hub upload endpoint /hub/v3/module/file/upload
+      const uploadResponsePromise = page.waitForResponse(
+        (response) => response.url().includes('/module/file/upload') && (response.status() === 200 || response.status() === 201),
+        { timeout: 35000 }
+      ).catch(() => null);
+
       // Attempt 1: Choose File button (click then setInputFiles matching codegen)
       try {
         const chooseFileBtn = page.getByRole('button', { name: 'Choose File' })
@@ -320,16 +326,6 @@ async function main() {
           await chooseFileBtn.setInputFiles(tempFilePath);
           fileAttached = true;
           emitLog('info', 'File attached via "Choose File" button setInputFiles.');
-
-          // Wait for file list confirmation signal (from trace: role=option with filename)
-          try {
-            const uploadedItem = page.locator(`[role="option"]:has-text("${baseName}"), .x-boundlist-item:has-text("${baseName}"), td:has-text("${baseName}")`).first();
-            await uploadedItem.waitFor({ state: 'visible', timeout: 8000 });
-            emitLog('info', `File attachment confirmed in portal list: ${baseName}`);
-          } catch {
-            emitLog('info', 'File attachment visual wait completed.');
-            await page.waitForTimeout(3000);
-          }
         }
       } catch (cfErr) {
         emitLog('info', `Choose File setInputFiles notice: ${cfErr.message}`);
@@ -343,7 +339,6 @@ async function main() {
             await directBtn.setInputFiles(tempFilePath);
             fileAttached = true;
             emitLog('info', 'File attached via direct Choose File setInputFiles.');
-            await page.waitForTimeout(3000);
           }
         } catch (dErr) {
           emitLog('info', `Direct Choose File notice: ${dErr.message}`);
@@ -358,10 +353,28 @@ async function main() {
             await fileInput.setInputFiles(tempFilePath);
             fileAttached = true;
             emitLog('info', 'File attached via direct input[type="file"].');
-            await page.waitForTimeout(3000);
           }
         } catch (fiErr) {
           emitLog('warn', `Generic file input attachment error: ${fiErr.message}`);
+        }
+      }
+
+      // Wait for server HTTP upload confirmation
+      if (fileAttached) {
+        emitLog('info', 'Menunggu konfirmasi HTTP 200 dari endpoint /hub/v3/module/file/upload...');
+        const uploadRes = await uploadResponsePromise;
+        if (uploadRes) {
+          emitLog('info', `File zip berhasil diunggah ke portal! (HTTP ${uploadRes.status()}: ${uploadRes.url()})`);
+        } else {
+          emitLog('info', 'Upload HTTP response listener timeout, mengecek indikator visual...');
+        }
+
+        try {
+          const uploadedItem = page.locator(`[role="option"]:has-text("${baseName}"), .x-boundlist-item:has-text("${baseName}"), td:has-text("${baseName}")`).first();
+          await uploadedItem.waitFor({ state: 'visible', timeout: 5000 });
+          emitLog('info', `File attachment terkonfirmasi di portal file list.`);
+        } catch {
+          await page.waitForTimeout(2000);
         }
       }
 

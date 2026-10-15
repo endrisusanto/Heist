@@ -1375,6 +1375,12 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (req.url === '/api/logs') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(logs.slice(-100)));
+    return;
+  }
+
   function readJsonBody(incoming: http.IncomingMessage): Promise<string> {
     return new Promise((resolve, reject) => {
       let data = '';
