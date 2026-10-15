@@ -267,9 +267,9 @@ async function main() {
     const bodyContent = content || title || 'Automated Test Result';
     let editorFilled = false;
 
-    // Attempt 1: frameLocator
+    // Attempt 1: frameLocator using exact ID from trace
     try {
-      const editorFrame = page.frameLocator('iframe#NamoSE_editorframe_inputEl-hubhtmleditor, iframe[id*="NamoSE_editorframe"]');
+      const editorFrame = page.frameLocator('#NamoSE_editorframe_inputEl-hubhtmleditor, iframe[id*="NamoSE_editorframe"]');
       const editorBody = editorFrame.locator('body');
       if (await editorBody.isVisible({ timeout: 4000 })) {
         await editorBody.click();
@@ -284,7 +284,7 @@ async function main() {
     // Attempt 2: contentFrame handle
     if (!editorFilled) {
       try {
-        const frameHandle = await page.$('iframe#NamoSE_editorframe_inputEl-hubhtmleditor, iframe[id*="NamoSE_editorframe"], #NamoSE_editorframe_inputEl-hubhtmleditor');
+        const frameHandle = await page.$('#NamoSE_editorframe_inputEl-hubhtmleditor, iframe[id*="NamoSE_editorframe"]');
         if (frameHandle) {
           const cFrame = await frameHandle.contentFrame();
           if (cFrame) {
@@ -301,7 +301,8 @@ async function main() {
 
     // Upload archive file
     if (tempFilePath && fs.existsSync(tempFilePath)) {
-      emitLog('info', `Attaching file: ${path.basename(tempFilePath)}...`);
+      const baseName = path.basename(tempFilePath);
+      emitLog('info', `Attaching file: ${baseName}...`);
       let fileAttached = false;
 
       // Attempt 1: Choose File button setInputFiles
@@ -313,6 +314,15 @@ async function main() {
           await chooseFileBtn.setInputFiles(tempFilePath);
           fileAttached = true;
           emitLog('info', 'File attached via "Choose File" button setInputFiles.');
+
+          // Wait for file list confirmation signal (from trace: role=option with filename)
+          try {
+            const uploadedItem = page.locator(`[role="option"]:has-text("${baseName}"), .x-boundlist-item:has-text("${baseName}")`).first();
+            await uploadedItem.waitFor({ state: 'visible', timeout: 6000 });
+            emitLog('info', `File attachment confirmed in portal list: ${baseName}`);
+          } catch {
+            await page.waitForTimeout(2000);
+          }
         }
       } catch (cfErr) {
         emitLog('info', `Choose File setInputFiles notice: ${cfErr.message}`);
@@ -326,6 +336,7 @@ async function main() {
             await fileInput.setInputFiles(tempFilePath);
             fileAttached = true;
             emitLog('info', 'File attached via direct input[type="file"].');
+            await page.waitForTimeout(2000);
           }
         } catch (fiErr) {
           emitLog('warn', `Generic file input attachment error: ${fiErr.message}`);
