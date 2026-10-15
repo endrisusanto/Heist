@@ -307,16 +307,16 @@ async function main() {
     if (tempFilePath && fs.existsSync(tempFilePath)) {
       const baseName = path.basename(tempFilePath);
       const fileSize = fs.statSync(tempFilePath).size;
-      emitLog('info', `Attaching file: ${baseName} (${Math.round(fileSize / 1024)} KB)...`);
+      const sizeKb = Math.round(fileSize / 1024);
+      emitLog('info', `[Upload] Memulai upload attachment "${baseName}" (${sizeKb} KB)...`);
       let fileAttached = false;
 
       // Listen for Samsung Mobile R&D Hub upload endpoint /hub/v3/module/file/upload
       const uploadResponsePromise = page.waitForResponse(
         (response) => response.url().includes('/module/file/upload') && (response.status() === 200 || response.status() === 201),
-        { timeout: 35000 }
+        { timeout: 45000 }
       ).catch(() => null);
 
-      // Attempt 1: Choose File button (click then setInputFiles matching codegen)
       try {
         const chooseFileBtn = page.getByRole('button', { name: 'Choose File' })
           .or(page.locator('button:has-text("Choose File"), .x-btn:has-text("Choose File")'))
@@ -325,111 +325,63 @@ async function main() {
           await chooseFileBtn.click();
           await chooseFileBtn.setInputFiles(tempFilePath);
           fileAttached = true;
-          emitLog('info', 'File attached via "Choose File" button setInputFiles.');
+          emitLog('info', '[Upload] Sedang mengunggah file attachment... Mohon tunggu transfer selesai.');
         }
       } catch (cfErr) {
         emitLog('info', `Choose File setInputFiles notice: ${cfErr.message}`);
       }
 
-      // Attempt 2: Direct setInputFiles without click
       if (!fileAttached) {
         try {
           const directBtn = page.getByRole('button', { name: 'Choose File' }).first();
           if (await directBtn.count() > 0) {
             await directBtn.setInputFiles(tempFilePath);
             fileAttached = true;
-            emitLog('info', 'File attached via direct Choose File setInputFiles.');
+            emitLog('info', '[Upload] Sedang mengunggah file via direct input...');
           }
-        } catch (dErr) {
-          emitLog('info', `Direct Choose File notice: ${dErr.message}`);
-        }
+        } catch {}
       }
 
-      // Attempt 3: Generic input[type="file"]
-      if (!fileAttached) {
-        try {
-          const fileInput = page.locator('input[type="file"]').first();
-          if (await fileInput.count() > 0) {
-            await fileInput.setInputFiles(tempFilePath);
-            fileAttached = true;
-            emitLog('info', 'File attached via direct input[type="file"].');
-          }
-        } catch (fiErr) {
-          emitLog('warn', `Generic file input attachment error: ${fiErr.message}`);
-        }
-      }
-
-      // Wait for server HTTP upload confirmation
+      // Wait for server HTTP upload confirmation calmly without jumping around fields
       if (fileAttached) {
-        emitLog('info', 'Menunggu konfirmasi HTTP 200 dari endpoint /hub/v3/module/file/upload...');
+        emitLog('info', '[Upload] Menunggu konfirmasi HTTP 200 dari endpoint /hub/v3/module/file/upload...');
         const uploadRes = await uploadResponsePromise;
         if (uploadRes) {
-          emitLog('info', `File zip berhasil diunggah ke portal! (HTTP ${uploadRes.status()}: ${uploadRes.url()})`);
+          emitLog('info', `[Upload] Sukses! File attachment diterima server portal (HTTP ${uploadRes.status()}).`);
         } else {
-          emitLog('info', 'Upload HTTP response listener timeout, mengecek indikator visual...');
+          emitLog('info', '[Upload] Menunggu penyelesaian visual file list...');
         }
 
-        try {
-          const uploadedItem = page.locator(`[role="option"]:has-text("${baseName}"), .x-boundlist-item:has-text("${baseName}"), td:has-text("${baseName}")`).first();
-          await uploadedItem.waitFor({ state: 'visible', timeout: 5000 });
-          emitLog('info', `File attachment terkonfirmasi di portal file list.`);
-        } catch {
-          await page.waitForTimeout(2000);
-        }
-      }
-
-      if (!fileAttached) {
+        // Brief calm delay so ExtJS form state stabilizes before clicking submit
+        await page.waitForTimeout(2500);
+      } else {
         emitLog('warn', 'Could not locate file uploader control on page.');
       }
     } else {
       emitLog('warn', `Archive file not available on disk! tempFilePath: ${tempFilePath}`);
     }
 
-    // Submit form: Handled resiliently against dynamic auto-generated IDs (e.g. hubbutton-1023, hubbutton-1045)
-    emitLog('info', 'Locating and clicking Submit button...');
+    // Submit form: Focused locator without erratic viewport scrolling
+    emitLog('info', 'Mengirim form (mencari tombol Submit/등록)...');
 
     let submitFound = false;
+    const primarySubmit = page.locator('#hubbutton-1023, button[id^="hubbutton"]:has-text("Submit"), button[id^="hubbutton"]:has-text("등록"), .x-toolbar .x-btn:has-text("Submit"), .x-toolbar .x-btn:has-text("등록")').first();
 
-    // Prioritized submit button selectors based on actual user Playwright codegen
-    const candidateSelectors = [
-      '#hubbutton-1023',
-      'button[id^="hubbutton"]:has-text("Submit")',
-      'button[id^="hubbutton"]:has-text("등록")',
-      'a[id^="hubbutton"]:has-text("Submit")',
-      'a[id^="hubbutton"]:has-text("등록")',
-      '.x-toolbar .x-btn:has-text("Submit")',
-      '.x-toolbar .x-btn:has-text("등록")',
-      '.x-toolbar .x-btn:has-text("Save")',
-      '.x-btn:has-text("Submit")',
-      '.x-btn:has-text("등록")',
-      '.x-btn:has-text("Save")',
-      'button:has-text("Submit")',
-      'button:has-text("등록")',
-      'button:has-text("Save")',
-      'button[id^="hubbutton-"]',
-      'a[id^="hubbutton-"]',
-      'input[type="submit"]',
-      'button[type="submit"]'
-    ];
+    try {
+      if (await primarySubmit.isVisible({ timeout: 3000 })) {
+        await primarySubmit.scrollIntoViewIfNeeded().catch(() => {});
+        emitLog('info', 'Menemukan tombol submit utama. Mengklik...');
+        await primarySubmit.click();
+        submitFound = true;
+      }
+    } catch {}
 
-    for (const sel of candidateSelectors) {
-      try {
-        const btn = page.locator(sel).first();
-        if (await btn.isVisible({ timeout: 1500 })) {
-          emitLog('info', `Located submit button via selector: "${sel}"`);
-          await btn.click();
-          submitFound = true;
-          break;
-        }
-      } catch {}
-    }
-
-    // Accessible role locator fallback
     if (!submitFound) {
       try {
-        const roleSubmit = page.getByRole('button', { name: /Submit|등록|Save|저장|OK/i }).first();
+        const roleSubmit = page.getByRole('button', { name: /Submit|등록|Save|저장/i }).first();
         if (await roleSubmit.isVisible({ timeout: 2000 })) {
-          emitLog('info', 'Located submit button via accessible role.');
+          await roleSubmit.scrollIntoViewIfNeeded().catch(() => {});
+          emitLog('info', 'Menemukan tombol submit via accessible role. Mengklik...');
           await roleSubmit.click();
           submitFound = true;
         }
