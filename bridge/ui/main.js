@@ -12,6 +12,7 @@ const els = {
   nodeId: document.getElementById('nodeId'),
   hubUrl: document.getElementById('hubUrl'),
   atmRoot: document.getElementById('atmRoot'),
+  headless: document.getElementById('headless'),
   browseBtn: document.getElementById('browseBtn'),
   configForm: document.getElementById('configForm'),
   saveBtn: document.getElementById('saveBtn'),
@@ -104,7 +105,10 @@ async function init() {
       els.nodeId.value = config.node_id || '';
       els.hubUrl.value = config.hub_url || 'wss://heist.endrisusanto.my.id/ws/bridge';
       els.atmRoot.value = config.atm_root || '';
-      appendLog('sys', `Loaded configuration for node "${config.node_id || 'unknown'}"`);
+      if (els.headless) {
+        els.headless.checked = config.headless !== false;
+      }
+      appendLog('sys', `Loaded configuration for node "${config.node_id || 'unknown'}" (headless: ${config.headless !== false})`);
     }
   } catch (err) {
     appendLog('error', `Failed to load bridge config: ${err}`);
@@ -139,6 +143,7 @@ async function init() {
           hub_url: els.hubUrl.value.trim(),
           bridge_token: '',
           atm_root: els.atmRoot.value.trim(),
+          headless: els.headless ? Boolean(els.headless.checked) : true,
         }
       });
       updateStatus('connecting', 'Reconnecting with new settings...');

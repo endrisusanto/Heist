@@ -1,49 +1,22 @@
 use crate::types::{BridgeToHubMessage, CheckAuthPayload, SubmitHubPayload};
 use std::path::PathBuf;
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::mpsc;
 
-fn resolve_script(app: &AppHandle, script_name: &str) -> (PathBuf, Option<PathBuf>) {
-    let subpath = format!("resources/engine/{}", script_name);
-    let engine_subpath = format!("engine/{}", script_name);
-    let dev_subpath = format!("bridge/resources/engine/{}", script_name);
-
-    let candidates = [
-        app.path().resolve(&subpath, tauri::path::BaseDirectory::Resource).ok(),
-        app.path().resolve(&engine_subpath, tauri::path::BaseDirectory::Resource).ok(),
-        app.path().resource_dir().map(|p| p.join(&subpath)).ok(),
-        app.path().resource_dir().map(|p| p.join(&engine_subpath)).ok(),
-        std::env::current_exe().ok().and_then(|e| e.parent().map(|p| p.join(&subpath))),
-        std::env::current_exe().ok().and_then(|e| e.parent().map(|p| p.join(&engine_subpath))),
-        Some(PathBuf::from(&dev_subpath)),
-        Some(PathBuf::from(&subpath)),
-        Some(PathBuf::from(&engine_subpath)),
-    ];
-
-    for candidate in candidates.into_iter().flatten() {
-        if candidate.exists() {
-            let working_dir = candidate.parent().map(|p| p.to_path_buf());
-            return (candidate, working_dir);
-        }
-    }
-
-    (PathBuf::from(&subpath), None)
-}
+const EMBEDDED_RUNNER_SCRIPT: &str = include_str!("../resources/engine/runner.mjs");
 
 pub fn execute_hub_submission(
-    app: AppHandle,
+    _app: AppHandle,
     payload: SubmitHubPayload,
     tx: mpsc::UnboundedSender<BridgeToHubMessage>,
 ) {
     tokio::spawn(async move {
-        let (script_path, working_dir) = resolve_script(&app, "runner.mjs");
-        if !script_path.exists() {
-            let err_msg = format!("Playwright submission engine not found at {:?}", script_path);
-            let _ = tx.send(BridgeToHubMessage::action_response("submit_hub", false, err_msg));
-            return;
-        }
+        let tmp_path = std::env::temp_dir().join("heist_runner.mjs");
+        let _ = std::fs::write(&tmp_path, EMBEDDED_RUNNER_SCRIPT);
+        let script_path = tmp_path;
+        let working_dir: Option<PathBuf> = None;
 
         let serialized = match serde_json::to_string(&payload) {
             Ok(s) => s,

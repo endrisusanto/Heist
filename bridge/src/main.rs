@@ -603,11 +603,21 @@ fn handle_hub_command(
             });
         }
         HubToBridgeMessage::SubmitToHub(payload) => {
-            emit_log(app, "info", &format!("Mobile R&D Hub submission requested for \"{}\"", payload.title));
+            let bridge_headless = state.config.lock().map(|c| c.headless).unwrap_or(true);
+            let mut payload = payload;
+            if !bridge_headless {
+                payload.headless = false;
+            }
+            emit_log(app, "info", &format!("Mobile R&D Hub submission requested for \"{}\" (headless: {})", payload.title, payload.headless));
             hub_submit::execute_hub_submission(app.clone(), payload, tx.clone());
         }
         HubToBridgeMessage::CheckAuth(payload) => {
-            emit_log(app, "info", "Verifying Mobile R&D Hub portal session cookies...");
+            let bridge_headless = state.config.lock().map(|c| c.headless).unwrap_or(true);
+            let mut payload = payload;
+            if !bridge_headless {
+                payload.headless = false;
+            }
+            emit_log(app, "info", &format!("Verifying Mobile R&D Hub portal session cookies (headless: {})...", payload.headless));
             hub_submit::check_hub_auth(app.clone(), payload, tx.clone());
         }
         HubToBridgeMessage::Ping => {

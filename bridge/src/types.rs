@@ -7,6 +7,8 @@ pub struct BridgeConfig {
     #[serde(default)]
     pub bridge_token: String,
     pub atm_root: String,
+    #[serde(default = "default_headless_true")]
+    pub headless: bool,
 }
 
 impl Default for BridgeConfig {
@@ -19,6 +21,7 @@ impl Default for BridgeConfig {
             hub_url: "wss://heist.endrisusanto.my.id/ws/bridge".to_string(),
             bridge_token: "".to_string(),
             atm_root: default_atm_root_path(),
+            headless: true,
         }
     }
 }

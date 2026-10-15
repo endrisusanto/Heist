@@ -246,21 +246,82 @@ async function main() {
 
     // Submit form
     emitLog('info', 'Submitting form...');
-    const submitBtn = page.locator('button:has-text("Submit"), button:has-text("등록"), input[type="submit"], .btn-submit').first();
-    if (await submitBtn.isVisible({ timeout: 2500 })) {
-      await submitBtn.click();
-      await page.waitForTimeout(3000);
-    } else {
-      emitLog('warn', 'Submit button not located.');
+    const submitSelectors = [
+      'button:has-text("Submit")',
+      'button:has-text("등록")',
+      'button:has-text("Save")',
+      'button:has-text("저장")',
+      'input[type="submit"]',
+      'button[type="submit"]',
+      'input[value*="등록"]',
+      'input[value*="Submit"]',
+      'input[value*="Save"]',
+      'input[value*="저장"]',
+      'a.btn-submit',
+      '.btn-submit',
+      '#btn_submit',
+      '.btn_area input',
+      '.btn_area button',
+      '.btn_area a',
+      '.x-btn:has-text("Submit")',
+      '.x-btn:has-text("등록")',
+      '.x-btn:has-text("Save")'
+    ];
+
+    let submitFound = false;
+    for (const sel of submitSelectors) {
+      try {
+        const btn = page.locator(sel).first();
+        if (await btn.isVisible({ timeout: 1000 })) {
+          emitLog('info', `Located submit button via selector: "${sel}"`);
+          await btn.click();
+          submitFound = true;
+          break;
+        }
+      } catch {}
     }
 
-    emitLog('info', `Submission complete for "${title}"`);
+    if (!submitFound) {
+      emitLog('warn', 'Submit button not located directly. Attempting DOM form.submit() fallback...');
+      const formSubmitted = await page.evaluate(() => {
+        const form = document.querySelector('form#fo_write, form.board_write, form[action*="mid=board"], form[name="write_form"], form');
+        if (form && typeof form.submit === 'function') {
+          form.submit();
+          return true;
+        }
+        return false;
+      }).catch(() => false);
+
+      if (formSubmitted) {
+        emitLog('info', 'Triggered form.submit() via DOM.');
+        submitFound = true;
+      }
+    }
+
+    if (!submitFound) {
+      emitLog('error', 'Tombol Submit / 등록 tidak ditemukan pada form Mobile R&D Hub.');
+      if (!headless) {
+        emitLog('info', 'Visual debugging mode: Menunggu 15 detik untuk inspeksi layar PC Windows...');
+        await page.waitForTimeout(15000);
+      }
+      throw new Error('Tombol Submit / 등록 tidak ditemukan pada form Mobile R&D Hub.');
+    }
+
+    emitLog('info', 'Menunggu respon submission dari portal...');
+    await page.waitForTimeout(4000);
+
+    const afterUrl = page.url();
+    emitLog('info', `Submission selesai. Halaman aktif: ${afterUrl}`);
     emit('finished', { success: true, message: `Successfully submitted "${title}" to Mobile R&D Hub` });
   } catch (err) {
     emitLog('error', `Submission error: ${err.message}`);
     emit('finished', { success: false, message: `Submission failed: ${err.message}` });
   } finally {
     if (browser) {
+      if (!headless) {
+        emitLog('info', 'Visual mode: Browser akan ditutup dalam 5 detik...');
+        await new Promise((r) => setTimeout(r, 5000));
+      }
       try { await browser.close(); } catch {}
     }
     // Clean up temporary file created from base64 buffer
