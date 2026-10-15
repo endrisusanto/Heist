@@ -36,6 +36,7 @@ interface HistoryItem {
   devices: string[];
   pda?: string;
   model?: string;
+  submissionId?: string;
   runtimeSecs: number;
   passed: number;
   failed: number;
@@ -1263,7 +1264,8 @@ function formatTimestamp(ts?: number): string {
 }
 
 // History
-// ponytail: format title for Mobile R&D Hub submission
+// History
+// ponytail: format title for Mobile R&D Hub submission using Submission ID from project_manager
 function getPresetTitle(item: HistoryItem): string {
   const devSerial = item.devices[0] || '';
   let dev: DeviceInfo | undefined;
@@ -1271,11 +1273,13 @@ function getPresetTitle(item: HistoryItem): string {
     dev = (node.devices || []).find((d) => d.serial === devSerial);
     if (dev) break;
   }
-  const subId = item.id;
   const model = item.model || dev?.model || 'Device';
   const pda = item.pda || dev?.build || (item.archiveName?.match(/^ATM_([^\.]+)\.zip$/i)?.[1] || 'UNKNOWN');
   const carrier = dev?.carrier && dev.carrier !== '-' ? dev.carrier : (dev?.csc && dev.csc !== '-' ? dev.csc : 'XID');
-  return `[${subId}][${model}][${pda}][${carrier}]`;
+
+  // Bracket pertama: Submission ID dari task project_manager, fallback ke item.id (run-id)
+  const firstBracket = item.submissionId || item.id;
+  return `[${firstBracket}][${model}][${pda}][${carrier}]`;
 }
 
 function renderHistory() {
@@ -1336,6 +1340,27 @@ function renderHistory() {
 
   els.historyTableBody.innerHTML = html;
 
+  // ponytail: Pre-fetch Submission ID from project_manager in background for any item with PDA
+  for (const item of historyList) {
+    const itemPda = item.pda || (item.archiveName?.match(/^ATM_([^\.]+)\.zip$/i)?.[1] || '');
+    if (itemPda && !item.submissionId) {
+      fetch(`/api/project/submission-id?pda=${encodeURIComponent(itemPda)}`)
+        .then((r) => r.json())
+        .then((data) => {
+          if (data && data.success && data.submission_id) {
+            item.submissionId = data.submission_id;
+            const rowTag = document.querySelector(`tr[data-history-id="${item.id}"] .preset-title-tag`);
+            if (rowTag) {
+              const updatedTitle = getPresetTitle(item);
+              rowTag.textContent = updatedTitle;
+              rowTag.setAttribute('title', updatedTitle);
+            }
+          }
+        })
+        .catch(() => {});
+    }
+  }
+
   els.historyTableBody.querySelectorAll('[data-delete-hist]').forEach((btn) => {
     btn.addEventListener('click', (e) => {
       const id = (e.currentTarget as HTMLElement).dataset.deleteHist!;
@@ -1349,6 +1374,20 @@ function renderHistory() {
       const id = button.dataset.submitHub!;
       const item = historyList.find((h) => h.id === id);
       if (!item) return;
+
+      const itemPda = item.pda || (item.archiveName?.match(/^ATM_([^\.]+)\.zip$/i)?.[1] || '');
+      // Ensure latest submission ID is resolved before confirming
+      if (itemPda && !item.submissionId) {
+        try {
+          const res = await fetch(`/api/project/submission-id?pda=${encodeURIComponent(itemPda)}`);
+          if (res.ok) {
+            const data = await res.json();
+            if (data && data.success && data.submission_id) {
+              item.submissionId = data.submission_id;
+            }
+          }
+        } catch {}
+      }
 
       const title = getPresetTitle(item);
       if (!confirm(`Kirim hasil test ke Mobile R&D Hub?\n\nFile : ${item.archiveName || 'ATM_results.zip'}\nTitle: ${title}`)) {

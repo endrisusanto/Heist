@@ -1361,6 +1361,42 @@ function createZipBuffer(files: Array<{ name: string; content: string | Buffer }
   return Buffer.concat(buffers);
 }
 
+// ponytail: Cache submission ID lookup to minimize network overhead
+const submissionIdCache = new Map<string, string>();
+
+async function resolveSubmissionIdByPda(pda: string): Promise<string | null> {
+  const clean = String(pda || '').replace(/[^a-zA-Z0-9]/g, '').trim();
+  if (!clean) return null;
+  if (submissionIdCache.has(clean)) {
+    return submissionIdCache.get(clean) || null;
+  }
+
+  const endpoints = [
+    `http://172.17.0.1:8089/api_submission_id.php?pda=${encodeURIComponent(clean)}`,
+    `http://127.0.0.1:8089/api_submission_id.php?pda=${encodeURIComponent(clean)}`,
+    `http://host.docker.internal:8089/api_submission_id.php?pda=${encodeURIComponent(clean)}`,
+    `http://project_manager-web-1/api_submission_id.php?pda=${encodeURIComponent(clean)}`
+  ];
+
+  for (const url of endpoints) {
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(1500) });
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.success && data.submission_id) {
+          const subId = String(data.submission_id).trim();
+          if (subId) {
+            submissionIdCache.set(clean, subId);
+            return subId;
+          }
+        }
+      }
+    } catch {}
+  }
+
+  return null;
+}
+
 // HTTP Server with static file serving
 const server = http.createServer(async (req, res) => {
   if (req.url === '/api/health') {
@@ -1378,6 +1414,16 @@ const server = http.createServer(async (req, res) => {
   if (req.url === '/api/logs') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(logs.slice(-100)));
+    return;
+  }
+
+  // ponytail: Lookup Submission ID from project_manager database by PDA
+  if (req.url?.startsWith('/api/project/submission-id')) {
+    const urlObj = new URL(req.url, `http://${req.headers.host}`);
+    const pda = urlObj.searchParams.get('pda') || urlObj.searchParams.get('ap') || '';
+    const subId = await resolveSubmissionIdByPda(pda);
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ success: Boolean(subId), submission_id: subId, pda }));
     return;
   }
 
@@ -1652,11 +1698,23 @@ const server = http.createServer(async (req, res) => {
   if (req.url === '/api/hub/submit' && req.method === 'POST') {
     readJsonBody(req).then(async (raw) => {
       const payload = JSON.parse(raw || '{}');
-      const title = payload.title || 'ATM Test Result';
-      const category = payload.category || 'Result';
-      const archiveName = payload.archiveName || 'ATM_results.zip';
       const pda = payload.pda || '';
       const model = payload.model || '';
+      let title = payload.title || 'ATM Test Result';
+
+      // ponytail: Resolve Submission ID from project_manager if PDA is available
+      const pdaForLookup = pda || (title.match(/\[([A-Z0-9]{10,16})\]/)?.[1] || '');
+      if (pdaForLookup) {
+        const resolvedSubId = await resolveSubmissionIdByPda(pdaForLookup);
+        if (resolvedSubId && (title.startsWith('[run-') || title.startsWith('[{submissionId}]'))) {
+          const oldTitle = title;
+          title = title.replace(/^\[[^\]]+\]/, `[${resolvedSubId}]`);
+          pushLog(`[SubmitHub] Updated title with Submission ID: "${oldTitle}" -> "${title}"`);
+        }
+      }
+
+      const category = payload.category || 'Result';
+      const archiveName = payload.archiveName || 'ATM_results.zip';
       const activeTools = payload.tools ? (Array.isArray(payload.tools) ? payload.tools : [payload.tools]) : ['all'];
       const requestedNodeId = payload.nodeId || '';
 
