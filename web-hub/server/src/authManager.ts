@@ -94,6 +94,7 @@ export function saveHubConfig(partial: Partial<HubConfig>): HubConfig {
   const updated: HubConfig = {
     ...current,
     ...partial,
+    autoSubmit: partial.autoSubmit !== undefined ? Boolean(partial.autoSubmit) : current.autoSubmit,
     headless: partial.headless !== undefined ? Boolean(partial.headless) : (current.headless !== false)
   };
   try {

@@ -1679,7 +1679,37 @@ function setupEventListeners() {
     // 2. Start Device Run
     const startBtn = target.closest<HTMLButtonElement>('.btn-start-device');
     if (startBtn && startBtn.dataset.serial) {
-      sendToHub({ type: 'START_RUN', payload: { serial: startBtn.dataset.serial } });
+      const serial = startBtn.dataset.serial;
+      const wf = workflows[serial];
+      if (wf) {
+        // ponytail: Bersihkan seketika state lama pada ATM TEST SUITES dan workflow card di UI
+        wf.toolStatus = {};
+        for (const t of wf.tools) {
+          wf.toolStatus[t] = {
+            status: 'STANDBY',
+            subtext: 'Menunggu giliran pengujian...',
+            duration: '-',
+            durationSecs: 0
+          };
+        }
+        wf.run = {
+          runId: `run-${serial}-${Date.now()}`,
+          startedAt: Date.now(),
+          failed: false
+        };
+        // Pastikan accordion card dan sub-accordion tools terbuka
+        const card = startBtn.closest<HTMLElement>('.dashboard-card');
+        if (card && !card.classList.contains('expanded')) {
+          card.classList.add('expanded');
+          collapsedCardSerials.delete(serial);
+        }
+        const subBox = card?.querySelector<HTMLElement>('.sub-accordion-box');
+        if (subBox && !subBox.classList.contains('expanded')) {
+          subBox.classList.add('expanded');
+        }
+        renderWorkflows();
+      }
+      sendToHub({ type: 'START_RUN', payload: { serial } });
       return;
     }
 

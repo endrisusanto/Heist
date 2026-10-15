@@ -982,6 +982,7 @@ function finishDeviceRun(serial: string, status: 'FINISHED' | 'CANCELLED') {
 
   let pda = wf.pda || serial;
   let devModel = wf.model || '';
+  let carrier = '';
   for (const node of Object.values(fleetState.nodes)) {
     const dev = (node.devices || []).find((d) => d.serial === serial);
     if (dev) {
@@ -989,6 +990,11 @@ function finishDeviceRun(serial: string, status: 'FINISHED' | 'CANCELLED') {
       if (v) { pda = v.trim(); }
       if (!devModel && dev.model && dev.model !== '-' && dev.model !== 'UNKNOWN') {
         devModel = dev.model.trim();
+      }
+      if (dev.carrier && dev.carrier !== '-' && dev.carrier !== 'UNKNOWN') {
+        carrier = dev.carrier.trim();
+      } else if (dev.csc && dev.csc !== '-' && dev.csc !== 'UNKNOWN') {
+        carrier = dev.csc.trim();
       }
     }
   }
@@ -1073,6 +1079,37 @@ function finishDeviceRun(serial: string, status: 'FINISHED' | 'CANCELLED') {
   pushLog(`[Hub] Run ${runInfo.runId} on ${serial} ${status}`, status === 'FINISHED' ? 'success' : 'warn');
   broadcastApp();
   broadcastFleetState();
+
+  // ponytail: Auto-submit ke Mobile R&D Hub jika opsi autoSubmit aktif di pengaturan
+  if (status === 'FINISHED') {
+    const hubConfig = getHubConfig();
+    if (hubConfig.autoSubmit) {
+      const activeTools = [...wf.tools];
+      const targetModel = devModel || wf.model;
+      const targetPda = pda;
+      const targetCarrier = carrier || 'XID';
+      pushLog(`[AutoSubmit] Opsi Auto-Submit aktif. Menyiapkan auto-submission ke Mobile R&D Hub untuk ${targetModel} (${targetPda})...`, 'sys');
+      setTimeout(() => {
+        performMobileRndHubSubmit({
+          pda: targetPda,
+          model: targetModel,
+          carrier: targetCarrier,
+          runId: runInfo.runId,
+          tools: activeTools,
+          archiveName: `ATM_${targetPda}.zip`
+        }).then((res) => {
+          if (res.ok) {
+            pushLog(`[AutoSubmit] Berhasil auto-submit ke Mobile R&D Hub: ${res.message}`, 'success');
+          } else {
+            pushLog(`[AutoSubmit] Gagal auto-submit: ${res.message}`, 'warn');
+          }
+        }).catch((err) => {
+          console.error('[AutoSubmit] Error during auto-submit:', err);
+          pushLog(`[AutoSubmit] Exception auto-submit: ${err.message}`, 'err');
+        });
+      }, 1500);
+    }
+  }
 }
 
 function startDeviceRun(serial: string, ui: WebSocket) {
@@ -1095,6 +1132,8 @@ function startDeviceRun(serial: string, ui: WebSocket) {
     startedAt: Date.now(),
     failed: false
   };
+  // ponytail: Clear state lama pada accordion ATM workflow & ATM TEST SUITES sebelum run baru dimulai
+  wf.toolStatus = {};
   for (const t of wf.tools) {
     wf.toolStatus[t] = {
       status: 'STANDBY',
@@ -1397,6 +1436,232 @@ async function resolveSubmissionIdByPda(pda: string): Promise<string | null> {
   return null;
 }
 
+function getMobileRndBridgeNode(): { nodeId: string; ws: WebSocket } | null {
+  const preferredId = 'endri-s02';
+  const preferredWs = bridgeConnections.get(preferredId);
+  if (preferredWs && preferredWs.readyState === WebSocket.OPEN) {
+    return { nodeId: preferredId, ws: preferredWs };
+  }
+  for (const [nodeId, socket] of bridgeConnections.entries()) {
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      const nodeMeta = fleetState.nodes[nodeId];
+      if (nodeMeta && nodeMeta.os === 'windows') {
+        return { nodeId, ws: socket };
+      }
+    }
+  }
+  return null;
+}
+
+function readDirectoryFiles(dir: string, baseDir: string = dir): Array<{ name: string; content: Buffer }> {
+  let results: Array<{ name: string; content: Buffer }> = [];
+  try {
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      const relPath = path.relative(baseDir, fullPath).replace(/\\/g, '/');
+      if (entry.isDirectory()) {
+        results = results.concat(readDirectoryFiles(fullPath, baseDir));
+      } else if (entry.isFile()) {
+        results.push({ name: relPath, content: fs.readFileSync(fullPath) });
+      }
+    }
+  } catch {
+    // ignore read errors
+  }
+  return results;
+}
+
+function getTestcaseZip(toolName: string, pda: string, model: string): { filename: string; buffer: Buffer } {
+  const tLower = toolName.toLowerCase();
+  let candidateFolders = ['Getprop'];
+  let canonicalName = 'Getprop';
+  if (tLower.includes('bvt')) { candidateFolders = ['BVT']; canonicalName = 'BVT'; }
+  else if (tLower.includes('svt')) { candidateFolders = ['SVT']; canonicalName = 'SVT'; }
+  else if (tLower.includes('sdt')) { candidateFolders = ['SDT']; canonicalName = 'SDT'; }
+  else if (tLower.includes('cts') || tLower.includes('ctsv')) { candidateFolders = ['CTSVerifier', 'CTSV', 'CTS-V']; canonicalName = 'CTSVerifier'; }
+  else if (tLower.includes('getprop')) { candidateFolders = ['Getprop']; canonicalName = 'Getprop'; }
+
+  const isCtsv = canonicalName === 'CTSVerifier';
+
+  // 1. Try reading real folder from disk if available
+  for (const folderName of candidateFolders) {
+    const localDir = findLocalResultFolder(model, pda, folderName);
+    if (localDir) {
+      // If CTS-V, return raw zip directly with original raw filename from VerifierReports!
+      if (isCtsv) {
+        const rawZip = findRawZipInDir(localDir);
+        if (rawZip) {
+          return rawZip;
+        }
+      }
+
+      const localFiles = readDirectoryFiles(localDir);
+      if (localFiles.length > 0) {
+        return {
+          filename: `${canonicalName}_${pda}.zip`,
+          buffer: createZipBuffer(localFiles)
+        };
+      }
+    }
+  }
+
+  // 2. Generate fallback structured test report archive
+  const nowIso = new Date().toISOString();
+  const effectiveModel = model || 'SM-Device';
+  const effectivePda = pda || 'UNKNOWN_PDA';
+  const fallbackXml = `<?xml version="1.0" encoding="UTF-8"?>\n<TestResult suite="${canonicalName}" model="${effectiveModel}" pda="${effectivePda}" timestamp="${nowIso}" status="PASS" result="PASS" pass="1" fail="0" total="1">\n  <Summary model="${effectiveModel}" pda="${effectivePda}" tool="${canonicalName}" status="PASS" timestamp="${nowIso}" />\n</TestResult>\n`;
+  const fallbackTxt = `=== ATM AUTO TESTCASE RESULT ===\nTool      : ${canonicalName}\nModel     : ${effectiveModel}\nPDA       : ${effectivePda}\nStatus    : PASSED\nTimestamp : ${nowIso}\nResult    : Automated Test Suite Executed Successfully\n`;
+  const fallbackJson = JSON.stringify({
+    tool: canonicalName,
+    model: effectiveModel,
+    pda: effectivePda,
+    status: 'PASSED',
+    timestamp: nowIso,
+    summary: { passed: 1, failed: 0, total: 1 }
+  }, null, 2);
+
+  const fallbackFiles: Array<{ name: string; content: Buffer }> = [
+    { name: `${canonicalName.toLowerCase()}_result.xml`, content: Buffer.from(fallbackXml, 'utf8') },
+    { name: `result_summary.txt`, content: Buffer.from(fallbackTxt, 'utf8') },
+    { name: `result.json`, content: Buffer.from(fallbackJson, 'utf8') },
+  ];
+
+  return {
+    filename: `${canonicalName}_${pda}.zip`,
+    buffer: createZipBuffer(fallbackFiles)
+  };
+}
+
+const TOOL_KEYS: Array<[string, (t: string) => boolean]> = [
+  ['Getprop', (t) => t.includes('getprop')],
+  ['BVT', (t) => t.includes('bvt') || t.includes('basic')],
+  ['SVT', (t) => t.includes('svt') || t.includes('preload')],
+  ['SDT', (t) => t.includes('sdt')],
+  ['CTSVerifier', (t) => t.includes('ctsv') || t.includes('cts')]
+];
+
+function getMasterArchiveZipBuffer(pda: string, model: string, activeTools: string[]): Buffer {
+  const toolsLower = activeTools.map((t) => t.toLowerCase().trim()).filter(Boolean);
+  const includeAll = toolsLower.length === 0 || toolsLower.includes('all');
+  const files: Array<{ name: string; content: Buffer }> = [];
+
+  for (const [folder, match] of TOOL_KEYS) {
+    if (!includeAll && !toolsLower.some(match)) continue;
+    const tc = getTestcaseZip(folder, pda, model);
+    if (tc && tc.buffer) {
+      files.push({ name: tc.filename, content: tc.buffer });
+    }
+  }
+  return createZipBuffer(files);
+}
+
+interface HubSubmitOptions {
+  pda: string;
+  model: string;
+  carrier?: string;
+  title?: string;
+  category?: string;
+  archiveName?: string;
+  tools?: string[];
+  runId?: string;
+  nodeId?: string;
+}
+
+async function performMobileRndHubSubmit(options: HubSubmitOptions): Promise<{ ok: boolean; message: string }> {
+  const pda = options.pda || '';
+  const model = options.model || '';
+  const carrier = options.carrier || 'XID';
+  const hubConfig = getHubConfig();
+
+  // 1. Resolve Title
+  let title = options.title || '';
+  if (!title) {
+    const resolvedSubId = await resolveSubmissionIdByPda(pda);
+    const firstBracket = resolvedSubId || options.runId || `run-${pda}-${Date.now()}`;
+    title = `[${firstBracket}][${model}][${pda}][${carrier}]`;
+  } else {
+    const pdaForLookup = pda || (title.match(/\[([A-Z0-9]{10,16})\]/)?.[1] || '');
+    if (pdaForLookup) {
+      const resolvedSubId = await resolveSubmissionIdByPda(pdaForLookup);
+      if (resolvedSubId && (title.startsWith('[run-') || title.startsWith('[{submissionId}]'))) {
+        const oldTitle = title;
+        title = title.replace(/^\[[^\]]+\]/, `[${resolvedSubId}]`);
+        pushLog(`[SubmitHub] Updated title with Submission ID: "${oldTitle}" -> "${title}"`);
+      }
+    }
+  }
+
+  const category = options.category || hubConfig.category || 'Result';
+  const archiveName = options.archiveName || (pda ? `ATM_${pda}.zip` : 'ATM_results.zip');
+  const activeTools = options.tools ? (Array.isArray(options.tools) ? options.tools : [options.tools]) : ['all'];
+
+  // 2. Master Archive buffer
+  const archiveBuffer = getMasterArchiveZipBuffer(pda, model, activeTools);
+
+  // 3. Delegate to PC Windows Bridge (endri-s02)
+  const bridgeTarget = getMobileRndBridgeNode();
+  if (!bridgeTarget) {
+    const errMsg = 'PC Windows "endri-s02" tidak terhubung ke Hub. Submission ke Mobile R&D Hub hanya dapat dilakukan melalui PC Windows.';
+    pushLog(`[SubmitHub] Gagal: ${errMsg}`, 'err');
+    return { ok: false, message: errMsg };
+  }
+
+  const { nodeId: targetNodeId, ws: bridgeWs } = bridgeTarget;
+  console.log(`[SubmitHub] Delegating Playwright submission to PC Windows Bridge "${targetNodeId}"...`);
+  pushLog(`[${targetNodeId}][hub_submit] Memulai otomasi submission "${title}" via PC Windows "${targetNodeId}"...`, 'sys');
+
+  const authPath = getAuthFilePath();
+  let authData: any = {};
+  try {
+    if (fs.existsSync(authPath)) {
+      authData = JSON.parse(fs.readFileSync(authPath, 'utf-8'));
+    }
+  } catch {}
+
+  const submitMsg = {
+    type: 'SubmitToHub',
+    payload: {
+      title,
+      category,
+      hub_base_url: hubConfig.hubBaseUrl,
+      board_srl: hubConfig.boardSrl,
+      archive_filename: archiveName,
+      archive_base64: archiveBuffer ? archiveBuffer.toString('base64') : '',
+      cookies: authData.cookies || [],
+      username: authData.username || '',
+      password: authData.password || '',
+      headless: hubConfig.headless !== false
+    }
+  };
+
+  bridgeWs.send(JSON.stringify(submitMsg));
+
+  const timeoutMs = 90000;
+  return new Promise<{ ok: boolean; message: string }>((resolve) => {
+    const handler = (data: any) => {
+      clearTimeout(timer);
+      const isOk = Boolean(data.success);
+      const msg = data.message || (isOk ? 'Berhasil submit' : 'Gagal submit');
+      pushLog(`[SubmitHub] ${msg}`, isOk ? 'success' : 'warn');
+      resolve({ ok: isOk, message: msg });
+    };
+
+    const eventName = `action:${targetNodeId}:submit_hub`;
+    bridgeActionEmitter.once(eventName, handler);
+
+    const timer = setTimeout(() => {
+      bridgeActionEmitter.removeListener(eventName, handler);
+      const timeoutMsg = `Timeout menunggu respons submission dari node "${targetNodeId}" (${timeoutMs / 1000}s).`;
+      pushLog(`[SubmitHub] ${timeoutMsg}`, 'err');
+      resolve({
+        ok: false,
+        message: timeoutMsg
+      });
+    }, timeoutMs);
+  });
+}
+
 // HTTP Server with static file serving
 const server = http.createServer(async (req, res) => {
   if (req.url === '/api/health') {
@@ -1492,23 +1757,6 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  function getMobileRndBridgeNode(): { nodeId: string; ws: WebSocket } | null {
-    const preferredId = 'endri-s02';
-    const preferredWs = bridgeConnections.get(preferredId);
-    if (preferredWs && preferredWs.readyState === WebSocket.OPEN) {
-      return { nodeId: preferredId, ws: preferredWs };
-    }
-    for (const [nodeId, socket] of bridgeConnections.entries()) {
-      if (socket && socket.readyState === WebSocket.OPEN) {
-        const nodeMeta = fleetState.nodes[nodeId];
-        if (nodeMeta && nodeMeta.os === 'windows') {
-          return { nodeId, ws: socket };
-        }
-      }
-    }
-    return null;
-  }
-
   if (req.url === '/api/settings/auth/test' && req.method === 'POST') {
     const bridgeTarget = getMobileRndBridgeNode();
 
@@ -1591,199 +1839,22 @@ const server = http.createServer(async (req, res) => {
 
 
 
-  function readDirectoryFiles(dir: string, baseDir: string = dir): Array<{ name: string; content: Buffer }> {
-    let results: Array<{ name: string; content: Buffer }> = [];
-    try {
-      const entries = fs.readdirSync(dir, { withFileTypes: true });
-      for (const entry of entries) {
-        const fullPath = path.join(dir, entry.name);
-        const relPath = path.relative(baseDir, fullPath).replace(/\\/g, '/');
-        if (entry.isDirectory()) {
-          results = results.concat(readDirectoryFiles(fullPath, baseDir));
-        } else if (entry.isFile()) {
-          results.push({ name: relPath, content: fs.readFileSync(fullPath) });
-        }
-      }
-    } catch {
-      // ignore read errors
-    }
-    return results;
-  }
-
-  function getTestcaseZip(toolName: string, pda: string, model: string): { filename: string; buffer: Buffer } {
-    const tLower = toolName.toLowerCase();
-    let candidateFolders = ['Getprop'];
-    let canonicalName = 'Getprop';
-    if (tLower.includes('bvt')) { candidateFolders = ['BVT']; canonicalName = 'BVT'; }
-    else if (tLower.includes('svt')) { candidateFolders = ['SVT']; canonicalName = 'SVT'; }
-    else if (tLower.includes('sdt')) { candidateFolders = ['SDT']; canonicalName = 'SDT'; }
-    else if (tLower.includes('cts') || tLower.includes('ctsv')) { candidateFolders = ['CTSVerifier', 'CTSV', 'CTS-V']; canonicalName = 'CTSVerifier'; }
-    else if (tLower.includes('getprop')) { candidateFolders = ['Getprop']; canonicalName = 'Getprop'; }
-
-    const isCtsv = canonicalName === 'CTSVerifier';
-
-    // 1. Try reading real folder from disk if available
-    for (const folderName of candidateFolders) {
-      const localDir = findLocalResultFolder(model, pda, folderName);
-      if (localDir) {
-        // If CTS-V, return raw zip directly with original raw filename from VerifierReports!
-        if (isCtsv) {
-          const rawZip = findRawZipInDir(localDir);
-          if (rawZip) {
-            return rawZip;
-          }
-        }
-
-        const localFiles = readDirectoryFiles(localDir);
-        if (localFiles.length > 0) {
-          return {
-            filename: `${canonicalName}_${pda}.zip`,
-            buffer: createZipBuffer(localFiles)
-          };
-        }
-      }
-    }
-
-    // 2. Generate fallback structured test report archive
-    const nowIso = new Date().toISOString();
-    const effectiveModel = model || 'SM-Device';
-    const effectivePda = pda || 'UNKNOWN_PDA';
-    const fallbackXml = `<?xml version="1.0" encoding="UTF-8"?>\n<TestResult suite="${canonicalName}" model="${effectiveModel}" pda="${effectivePda}" timestamp="${nowIso}" status="PASS" result="PASS" pass="1" fail="0" total="1">\n  <Summary model="${effectiveModel}" pda="${effectivePda}" tool="${canonicalName}" status="PASS" timestamp="${nowIso}" />\n</TestResult>\n`;
-    const fallbackTxt = `=== ATM AUTO TESTCASE RESULT ===\nTool      : ${canonicalName}\nModel     : ${effectiveModel}\nPDA       : ${effectivePda}\nStatus    : PASSED\nTimestamp : ${nowIso}\nResult    : Automated Test Suite Executed Successfully\n`;
-    const fallbackJson = JSON.stringify({
-      tool: canonicalName,
-      model: effectiveModel,
-      pda: effectivePda,
-      status: 'PASSED',
-      timestamp: nowIso,
-      summary: { passed: 1, failed: 0, total: 1 }
-    }, null, 2);
-
-    const fallbackFiles: Array<{ name: string; content: Buffer }> = [
-      { name: `${canonicalName.toLowerCase()}_result.xml`, content: Buffer.from(fallbackXml, 'utf8') },
-      { name: `result_summary.txt`, content: Buffer.from(fallbackTxt, 'utf8') },
-      { name: `result.json`, content: Buffer.from(fallbackJson, 'utf8') },
-    ];
-
-    return {
-      filename: `${canonicalName}_${pda}.zip`,
-      buffer: createZipBuffer(fallbackFiles)
-    };
-  }
-
-  const TOOL_KEYS: Array<[string, (t: string) => boolean]> = [
-    ['Getprop', (t) => t.includes('getprop')],
-    ['BVT', (t) => t.includes('bvt') || t.includes('basic')],
-    ['SVT', (t) => t.includes('svt') || t.includes('preload')],
-    ['SDT', (t) => t.includes('sdt')],
-    ['CTSVerifier', (t) => t.includes('ctsv') || t.includes('cts')]
-  ];
-
-  function getMasterArchiveZipBuffer(pda: string, model: string, activeTools: string[]): Buffer {
-    const toolsLower = activeTools.map((t) => t.toLowerCase().trim()).filter(Boolean);
-    const includeAll = toolsLower.length === 0 || toolsLower.includes('all');
-    const files: Array<{ name: string; content: Buffer }> = [];
-
-    for (const [folder, match] of TOOL_KEYS) {
-      if (!includeAll && !toolsLower.some(match)) continue;
-      const tc = getTestcaseZip(folder, pda, model);
-      if (tc && tc.buffer) {
-        files.push({ name: tc.filename, content: tc.buffer });
-      }
-    }
-    return createZipBuffer(files);
-  }
-
   // Submit to Mobile R&D Hub endpoint
   if (req.url === '/api/hub/submit' && req.method === 'POST') {
     readJsonBody(req).then(async (raw) => {
       const payload = JSON.parse(raw || '{}');
-      const pda = payload.pda || '';
-      const model = payload.model || '';
-      let title = payload.title || 'ATM Test Result';
-
-      // ponytail: Resolve Submission ID from project_manager if PDA is available
-      const pdaForLookup = pda || (title.match(/\[([A-Z0-9]{10,16})\]/)?.[1] || '');
-      if (pdaForLookup) {
-        const resolvedSubId = await resolveSubmissionIdByPda(pdaForLookup);
-        if (resolvedSubId && (title.startsWith('[run-') || title.startsWith('[{submissionId}]'))) {
-          const oldTitle = title;
-          title = title.replace(/^\[[^\]]+\]/, `[${resolvedSubId}]`);
-          pushLog(`[SubmitHub] Updated title with Submission ID: "${oldTitle}" -> "${title}"`);
-        }
-      }
-
-      const category = payload.category || 'Result';
-      const archiveName = payload.archiveName || 'ATM_results.zip';
-      const activeTools = payload.tools ? (Array.isArray(payload.tools) ? payload.tools : [payload.tools]) : ['all'];
-      const requestedNodeId = payload.nodeId || '';
-
-      const archiveBuffer = getMasterArchiveZipBuffer(pda, model, activeTools);
-
-      // Mobile R&D Hub submission hanya melalui PC Windows endri-s02
-      const bridgeTarget = getMobileRndBridgeNode();
-
-      if (!bridgeTarget) {
-        const errMsg = 'PC Windows "endri-s02" tidak terhubung ke Hub. Submission ke Mobile R&D Hub hanya dapat dilakukan melalui PC Windows.';
-        pushLog(`[SubmitHub] Gagal: ${errMsg}`);
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: false, message: errMsg }));
-        return;
-      }
-
-      const { nodeId: targetNodeId, ws: bridgeWs } = bridgeTarget;
-      console.log(`[SubmitHub] Delegating Playwright submission to PC Windows Bridge "${targetNodeId}"...`);
-      pushLog(`[${targetNodeId}][hub_submit] Memulai otomasi submission via PC Windows "${targetNodeId}"...`);
-
-        const authPath = getAuthFilePath();
-        let authData: any = {};
-        try {
-          if (fs.existsSync(authPath)) {
-            authData = JSON.parse(fs.readFileSync(authPath, 'utf-8'));
-          }
-        } catch {}
-
-        const hubConfig = getHubConfig();
-        const submitMsg = {
-          type: 'SubmitToHub',
-          payload: {
-            title,
-            category,
-            hub_base_url: hubConfig.hubBaseUrl,
-            board_srl: hubConfig.boardSrl,
-            archive_filename: archiveName,
-            archive_base64: archiveBuffer ? archiveBuffer.toString('base64') : '',
-            cookies: authData.cookies || [],
-            username: authData.username || '',
-            password: authData.password || '',
-            headless: hubConfig.headless !== false
-          }
-        };
-
-        bridgeWs.send(JSON.stringify(submitMsg));
-
-        const timeoutMs = 90000;
-        const result = await new Promise<{ ok: boolean; message: string }>((resolve) => {
-          const handler = (data: any) => {
-            clearTimeout(timer);
-            resolve({ ok: Boolean(data.success), message: data.message || (data.success ? 'Berhasil submit' : 'Gagal submit') });
-          };
-
-          const eventName = `action:${targetNodeId}:submit_hub`;
-          bridgeActionEmitter.once(eventName, handler);
-
-          const timer = setTimeout(() => {
-            bridgeActionEmitter.removeListener(eventName, handler);
-            resolve({
-              ok: false,
-              message: `Timeout menunggu respons submission dari node "${targetNodeId}" (${timeoutMs / 1000}s).`
-            });
-          }, timeoutMs);
-        });
-
+      const result = await performMobileRndHubSubmit({
+        pda: payload.pda || '',
+        model: payload.model || '',
+        carrier: payload.carrier || '',
+        title: payload.title || '',
+        category: payload.category || '',
+        archiveName: payload.archiveName || '',
+        tools: payload.tools || ['all'],
+        nodeId: payload.nodeId || ''
+      });
       res.writeHead(result.ok ? 200 : 400, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(result));
-      return;
     }).catch((err) => {
       res.writeHead(400, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ ok: false, message: err.message }));
