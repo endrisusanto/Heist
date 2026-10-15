@@ -160,19 +160,35 @@ async function main() {
     await page.goto(writeUrl, { waitUntil: 'domcontentloaded', timeout: 35000 });
     emitLog('info', `Page loaded. Active URL: ${page.url()}`);
 
+    // Dismiss any browser alert/confirm/prompt dialogs that appear during flow
+    page.on('dialog', (dialog) => {
+      emitLog('info', `Dismissing dialog: "${dialog.message()}"`);
+      dialog.dismiss().catch(() => {});
+    });
+
     let currentUrl = page.url();
     if (currentUrl.toLowerCase().includes('login') || currentUrl.toLowerCase().includes('sso') || currentUrl.toLowerCase().includes('adfs')) {
       emitLog('warn', `Redirected to SSO login: ${currentUrl}`);
 
       if (username && password) {
         emitLog('info', `Attempting auto-fill login for user "${username}"...`);
-        const userInput = page.locator('#userNameInput, input[name="UserName"], input[name="user_id"], input[name="username"], input[name="login_id"], input[id*="user" i], input[type="text"]').first();
-        const passInput = page.locator('#passwordInput, input[name="Password"], input[name="password"], input[name="passwd"], input[id*="pass" i], input[type="password"]').first();
+        const userInput = page.getByRole('textbox', { name: 'User Account' })
+          .or(page.locator('#userNameInput, input[name="UserName"], input[name="user_id"], input[name="username"], input[name="login_id"], input[id*="user" i]'))
+          .first();
+        const passInput = page.getByRole('textbox', { name: 'Password' })
+          .or(page.locator('#passwordInput, input[name="Password"], input[name="password"], input[name="passwd"], input[id*="pass" i]'))
+          .first();
 
         if (await userInput.isVisible({ timeout: 5000 }) && await passInput.isVisible({ timeout: 5000 })) {
+          await userInput.click();
           await userInput.fill(username);
+          await userInput.press('Tab');
           await passInput.fill(password);
-          const submitBtn = page.locator('#submitButton, span#submitButton, button#submitButton, input[type="submit"], button[type="submit"], button:has-text("Sign in"), button:has-text("Login"), button:has-text("로그인")').first();
+
+          const submitBtn = page.getByRole('button', { name: 'Login' })
+            .or(page.locator('#submitButton, span#submitButton, button#submitButton, input[type="submit"], button[type="submit"], button:has-text("Sign in"), button:has-text("Login"), button:has-text("로그인")'))
+            .first();
+
           if (await submitBtn.isVisible({ timeout: 3000 })) {
             await submitBtn.click();
           } else {
@@ -200,85 +216,173 @@ async function main() {
     }
 
     // Set Category
-    emitLog('info', `Filling Category: "${category}"...`);
+    const categoryName = category || 'Result';
+    emitLog('info', `Selecting Category: "${categoryName}"...`);
     try {
-      const catInput = page.locator('input[name="category_srl"], #category_combo input, select[name="category_srl"]').first();
-      if (await catInput.isVisible({ timeout: 2500 })) {
-        await catInput.fill(category);
+      const catField = page.getByPlaceholder('Category', { exact: true })
+        .or(page.locator('input[placeholder="Category"], input[name="category_srl"], #category_combo input'))
+        .first();
+      if (await catField.isVisible({ timeout: 5000 })) {
+        await catField.click();
+        await page.waitForTimeout(500);
+
+        const optionEl = page.getByRole('option', { name: categoryName })
+          .or(page.locator(`.x-boundlist-item:has-text("${categoryName}"), [role="option"]:has-text("${categoryName}")`))
+          .first();
+        if (await optionEl.isVisible({ timeout: 3000 })) {
+          await optionEl.click();
+          emitLog('info', `Category option "${categoryName}" selected.`);
+        } else {
+          emitLog('warn', `Category option "${categoryName}" not directly visible, attempting first option fallback...`);
+          const firstOpt = page.getByRole('option').first();
+          if (await firstOpt.isVisible({ timeout: 1500 })) {
+            await firstOpt.click();
+            emitLog('info', 'Selected first available category option.');
+          }
+        }
       }
-    } catch {}
+    } catch (catErr) {
+      emitLog('warn', `Category selection interaction: ${catErr.message}`);
+    }
 
     // Set Title
     emitLog('info', `Filling Title: "${title}"...`);
-    const titleInput = page.locator('input[name="title"], #title, input.x-form-text[name="title"]').first();
-    if (await titleInput.isVisible({ timeout: 3000 })) {
-      await titleInput.fill(title);
-    } else {
-      emitLog('warn', 'Title input element not found with standard selector.');
+    try {
+      const titleField = page.getByPlaceholder('Title')
+        .or(page.locator('input[placeholder="Title"], input[name="title"], #title, input.x-form-text[name="title"]'))
+        .first();
+      if (await titleField.isVisible({ timeout: 4000 })) {
+        await titleField.click();
+        await titleField.fill(title);
+        emitLog('info', 'Title filled successfully.');
+      } else {
+        emitLog('warn', 'Title input element not found with standard selector.');
+      }
+    } catch (titleErr) {
+      emitLog('warn', `Title fill notice: ${titleErr.message}`);
+    }
+
+    // Fill Editor Body (NamoSE HTML Editor frame)
+    emitLog('info', 'Filling Editor Body (NamoSE HTML Editor)...');
+    const bodyContent = content || title || 'Automated Test Result';
+    let editorFilled = false;
+
+    // Attempt 1: frameLocator
+    try {
+      const editorFrame = page.frameLocator('iframe#NamoSE_editorframe_inputEl-hubhtmleditor, iframe[id*="NamoSE_editorframe"]');
+      const editorBody = editorFrame.locator('body');
+      if (await editorBody.isVisible({ timeout: 4000 })) {
+        await editorBody.click();
+        await editorBody.fill(bodyContent);
+        editorFilled = true;
+        emitLog('info', 'Editor body filled via frameLocator.');
+      }
+    } catch (frameErr) {
+      emitLog('info', `frameLocator attempt info: ${frameErr.message}`);
+    }
+
+    // Attempt 2: contentFrame handle
+    if (!editorFilled) {
+      try {
+        const frameHandle = await page.$('iframe#NamoSE_editorframe_inputEl-hubhtmleditor, iframe[id*="NamoSE_editorframe"], #NamoSE_editorframe_inputEl-hubhtmleditor');
+        if (frameHandle) {
+          const cFrame = await frameHandle.contentFrame();
+          if (cFrame) {
+            await cFrame.click('body');
+            await cFrame.fill('body', bodyContent);
+            editorFilled = true;
+            emitLog('info', 'Editor body filled via contentFrame handle.');
+          }
+        }
+      } catch (cFrameErr) {
+        emitLog('warn', `contentFrame handle attempt: ${cFrameErr.message}`);
+      }
     }
 
     // Upload archive file
     if (tempFilePath && fs.existsSync(tempFilePath)) {
       emitLog('info', `Attaching file: ${path.basename(tempFilePath)}...`);
+      let fileAttached = false;
+
+      // Attempt 1: Choose File button setInputFiles
       try {
-        const fileChooserPromise = page.waitForEvent('filechooser', { timeout: 3000 }).catch(() => null);
-        const uploaderBtn = page.locator('.webix_uploader, input[type="file"], button:has-text("Upload"), .x-btn:has-text("Upload")').first();
-        if (await uploaderBtn.isVisible({ timeout: 2000 })) {
-          await uploaderBtn.click();
-          const chooser = await fileChooserPromise;
-          if (chooser) {
-            await chooser.setFiles(tempFilePath);
-            emitLog('info', 'File attached via filechooser.');
-          }
-        } else {
-          const directFileInput = page.locator('input[type="file"]').first();
-          if ((await directFileInput.count()) > 0) {
-            await directFileInput.setInputFiles(tempFilePath);
-            emitLog('info', 'File attached via direct file input.');
-          } else {
-            emitLog('warn', 'No file uploader element found on page.');
-          }
+        const chooseFileBtn = page.getByRole('button', { name: 'Choose File' })
+          .or(page.locator('button:has-text("Choose File"), .x-btn:has-text("Choose File")'))
+          .first();
+        if (await chooseFileBtn.isVisible({ timeout: 3000 })) {
+          await chooseFileBtn.setInputFiles(tempFilePath);
+          fileAttached = true;
+          emitLog('info', 'File attached via "Choose File" button setInputFiles.');
         }
-      } catch (uploadErr) {
-        emitLog('warn', `File upload interaction warning: ${uploadErr.message}`);
+      } catch (cfErr) {
+        emitLog('info', `Choose File setInputFiles notice: ${cfErr.message}`);
+      }
+
+      // Attempt 2: Generic input[type="file"]
+      if (!fileAttached) {
+        try {
+          const fileInput = page.locator('input[type="file"]').first();
+          if (await fileInput.count() > 0) {
+            await fileInput.setInputFiles(tempFilePath);
+            fileAttached = true;
+            emitLog('info', 'File attached via direct input[type="file"].');
+          }
+        } catch (fiErr) {
+          emitLog('warn', `Generic file input attachment error: ${fiErr.message}`);
+        }
+      }
+
+      if (!fileAttached) {
+        emitLog('warn', 'Could not locate file uploader control on page.');
       }
     }
 
-    // Submit form
-    emitLog('info', 'Submitting form...');
-    const submitSelectors = [
-      'button:has-text("Submit")',
-      'button:has-text("등록")',
-      'button:has-text("Save")',
-      'button:has-text("저장")',
-      'input[type="submit"]',
-      'button[type="submit"]',
-      'input[value*="등록"]',
-      'input[value*="Submit"]',
-      'input[value*="Save"]',
-      'input[value*="저장"]',
-      'a.btn-submit',
-      '.btn-submit',
-      '#btn_submit',
-      '.btn_area input',
-      '.btn_area button',
-      '.btn_area a',
-      '.x-btn:has-text("Submit")',
-      '.x-btn:has-text("등록")',
-      '.x-btn:has-text("Save")'
-    ];
+    // Submit form: Handled resiliently against dynamic auto-generated IDs (e.g. hubbutton-1023, hubbutton-1045)
+    emitLog('info', 'Locating and clicking Submit button...');
 
     let submitFound = false;
-    for (const sel of submitSelectors) {
-      try {
-        const btn = page.locator(sel).first();
-        if (await btn.isVisible({ timeout: 1000 })) {
-          emitLog('info', `Located submit button via selector: "${sel}"`);
-          await btn.click();
-          submitFound = true;
-          break;
-        }
-      } catch {}
+
+    // 1. Semantic Playwright role locator (Independent of HTML tags and dynamic IDs)
+    try {
+      const roleSubmit = page.getByRole('button', { name: /Submit|등록|Save|저장|OK/i }).first();
+      if (await roleSubmit.isVisible({ timeout: 2000 })) {
+        emitLog('info', 'Located submit button via accessible role & label.');
+        await roleSubmit.click();
+        submitFound = true;
+      }
+    } catch {}
+
+    // 2. ExtJS button selectors combining pattern matching and button text
+    if (!submitFound) {
+      const semanticSelectors = [
+        '[id^="hubbutton"]:has-text("Submit")',
+        '[id^="hubbutton"]:has-text("등록")',
+        '[id^="hubbutton"]:has-text("Save")',
+        '.x-btn:has-text("Submit")',
+        '.x-btn:has-text("등록")',
+        '.x-btn:has-text("Save")',
+        '.x-btn:has-text("저장")',
+        'button:has-text("Submit")',
+        'button:has-text("등록")',
+        'button:has-text("Save")',
+        'a:has-text("Submit")',
+        'a:has-text("등록")',
+        'input[type="submit"]',
+        'button[type="submit"]',
+        '#hubbutton-1023'
+      ];
+
+      for (const sel of semanticSelectors) {
+        try {
+          const btn = page.locator(sel).first();
+          if (await btn.isVisible({ timeout: 1000 })) {
+            emitLog('info', `Located submit button via selector: "${sel}"`);
+            await btn.click();
+            submitFound = true;
+            break;
+          }
+        } catch {}
+      }
     }
 
     if (!submitFound) {

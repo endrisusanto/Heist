@@ -68,15 +68,26 @@ async function attemptPlaywrightLogin(loginUrl, username, password, headless = t
   try {
     const context = await browser.newContext();
     const page = await context.newPage();
+    page.on('dialog', (dialog) => {
+      dialog.dismiss().catch(() => {});
+    });
     await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
 
-    const userInput = page.locator('#userNameInput, input[name="UserName"], input[name="user_id"], input[name="username"], input[name="login_id"], input[id*="user" i], input[type="text"]').first();
-    const passInput = page.locator('#passwordInput, input[name="Password"], input[name="password"], input[name="passwd"], input[id*="pass" i], input[type="password"]').first();
+    const userInput = page.getByRole('textbox', { name: 'User Account' })
+      .or(page.locator('#userNameInput, input[name="UserName"], input[name="user_id"], input[name="username"], input[name="login_id"], input[id*="user" i]'))
+      .first();
+    const passInput = page.getByRole('textbox', { name: 'Password' })
+      .or(page.locator('#passwordInput, input[name="Password"], input[name="password"], input[name="passwd"], input[id*="pass" i]'))
+      .first();
 
     if (await userInput.isVisible({ timeout: 5000 }) && await passInput.isVisible({ timeout: 5000 })) {
+      await userInput.click();
       await userInput.fill(username);
+      await userInput.press('Tab');
       await passInput.fill(password);
-      const submitBtn = page.locator('#submitButton, span#submitButton, button#submitButton, input[type="submit"], button[type="submit"], button:has-text("Sign in"), button:has-text("Login")').first();
+      const submitBtn = page.getByRole('button', { name: 'Login' })
+        .or(page.locator('#submitButton, span#submitButton, button#submitButton, input[type="submit"], button[type="submit"], button:has-text("Sign in"), button:has-text("Login")'))
+        .first();
       if (await submitBtn.isVisible({ timeout: 3000 })) {
         await submitBtn.click();
       } else {
